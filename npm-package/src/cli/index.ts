@@ -3,11 +3,42 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { readFile, writeFile, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { dirname, join } from 'path';
+import { createRequire } from 'module';
 import { analyze } from '../analyzer/index.js';
 import { generateReport } from '../docgen/index.js';
 import { generateTests } from '../testgen/index.js';
 
+// ─── 네이티브 바이너리 탐색 ───
+
+function findNativeBinary(): string | null {
+  const key = `${process.platform}-${process.arch}`;
+  const pkgName = `reverse-engine-${key}`;
+  const binName = process.platform === 'win32' ? 'reverseng.exe' : 'reverseng';
+
+  try {
+    const req = createRequire(import.meta.url);
+    const pkgJsonPath = req.resolve(`${pkgName}/package.json`);
+    const binPath = join(dirname(pkgJsonPath), 'bin', binName);
+    if (existsSync(binPath)) return binPath;
+  } catch { /* not installed */ }
+
+  return null;
+}
+
+function runNative(args: string[]) {
+  if (!nativeBin) return;
+  execFileSync(nativeBin, args, { stdio: 'inherit' });
+}
+
+const nativeBin = findNativeBinary();
 const program = new Command();
+
+if (nativeBin) {
+  console.log(chalk.dim(`⚡ 네이티브 Rust 바이너리 사용중`));
+}
 
 program
   .name('reverse-engine')
@@ -22,6 +53,12 @@ program
   .option('--include <patterns>', '포함 패턴 (쉼표 구분)', 'src/**/*.{ts,tsx,js,jsx,vue}')
   .option('--output <dir>', '출력 디렉토리', './output')
   .action(async (sourcePath: string, opts: any) => {
+    // 네이티브 바이너리가 있으면 Rust 사용 (5~10x 빠름)
+    if (nativeBin) {
+      runNative(['analyze', sourcePath, '--framework', opts.framework]);
+      return;
+    }
+
     console.log(chalk.green('▶'), '코드 분석 시작:', chalk.cyan(sourcePath));
 
     const result = await analyze(sourcePath, {
@@ -87,9 +124,34 @@ program
   .option('--output <dir>', '출력 디렉토리', './output')
   .option('--framework <name>', '프레임워크', 'auto')
   .action(async (opts: any) => {
-    console.log(chalk.green('\n◆'), 'ReversEngine 전체 파이프라인 시작\n');
+    console.log(chalk.green('\n◆'), 'ReversEngine 전체 파이프라인 시작',
+      nativeBin ? chalk.dim('(⚡ native)') : '', '\n');
 
-    // Step 1: 분석
+    // Step 1: 분석 — 네이티브가 있으면 Rust 사용
+    if (nativeBin) {
+      console.log(chalk.gray('━'.repeat(50)));
+      runNative(['analyze', opts.source, '--framework', opts.framework || 'auto']);
+
+      const analysisPath = `${opts.output}/analysis.json`;
+      if (existsSync(analysisPath)) {
+        const result = JSON.parse(await readFile(analysisPath, 'utf-8'));
+
+        console.log(chalk.gray('━'.repeat(50)));
+        const reports = await generateReport(result, { outputDir: `${opts.output}/reports` });
+        console.log(chalk.green('✓'), '리포트 생성 완료!');
+        reports.forEach((p: string) => console.log(`  → ${chalk.cyan(p)}`));
+
+        console.log(chalk.gray('━'.repeat(50)));
+        const tests = await generateTests(result, { outputDir: `${opts.output}/tests` });
+        console.log(chalk.green('✓'), `테스트 생성 완료! (${tests.length}개)`);
+        tests.forEach((p: string) => console.log(`  → ${chalk.cyan(p)}`));
+      }
+
+      console.log(chalk.green('\n✓'), '전체 파이프라인 완료!', chalk.cyan(opts.output), '\n');
+      return;
+    }
+
+    // JS fallback — Step 1: 분석
     console.log(chalk.gray('━'.repeat(50)));
     const result = await analyze(opts.source, { framework: opts.framework });
     console.log(chalk.green('✓'), `분석 완료: 컴포넌트 ${result.components.length}, 함수 ${result.functions.length}, API ${result.apiClients.length}, 라우트 ${result.routes.length}`);

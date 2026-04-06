@@ -1,0 +1,20 @@
+{
+  "name": "reverse-engine-win32-x64",
+  "version": "0.2.0",
+  "description": "reverse-engine native binary for win32-x64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/injaehwang/revers-eng"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "bin/reverseng.exe",
+  "files": [
+    "bin"
+  ]
+}

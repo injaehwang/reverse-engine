@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─── Rust 바이너리 빌드 (6개 플랫폼) ─────────────────────────
+
+  build-native:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            platform: win32-x64
+            bin: reverseng.exe
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            platform: win32-arm64
+            bin: reverseng.exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            platform: linux-x64
+            bin: reverseng
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            platform: linux-arm64
+            bin: reverseng
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            platform: darwin-x64
+            bin: reverseng
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            platform: darwin-arm64
+            bin: reverseng
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.platform == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Prepare platform package
+        shell: bash
+        run: |
+          PLATFORM_DIR=npm-package/platforms/${{ matrix.platform }}
+          mkdir -p $PLATFORM_DIR/bin
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} $PLATFORM_DIR/bin/
+
+          # package.json 버전 업데이트
+          VERSION=${GITHUB_REF_NAME#v}
+          cd $PLATFORM_DIR
+          node -e "
+            const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf-8'));
+            pkg.version = '$VERSION';
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-${{ matrix.platform }}
+          path: npm-package/platforms/${{ matrix.platform }}
+
+  # ─── npm 배포 ─────────────────────────────────────────────────
+
+  publish:
+    needs: build-native
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: npm-package/platforms
+          pattern: platform-*
+          merge-multiple: false
+
+      - name: Reorganize artifacts
+        run: |
+          cd npm-package/platforms
+          for dir in platform-*; do
+            platform=${dir#platform-}
+            if [ -d "$dir" ]; then
+              rm -rf "$platform"
+              mv "$dir" "$platform"
+            fi
+          done
+          ls -la */bin/ || true
+
+      - name: Update versions
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+
+          # 메인 패키지 버전 업데이트
+          cd npm-package
+          node -e "
+            const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf-8'));
+            pkg.version = '$VERSION';
+            // optionalDependencies 버전도 업데이트
+            for (const key of Object.keys(pkg.optionalDependencies || {})) {
+              pkg.optionalDependencies[key] = '$VERSION';
+            }
+            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Build main package
+        run: |
+          cd npm-package
+          npm install
+          npm run build
+
+      - name: Publish platform packages
+        run: |
+          cd npm-package/platforms
+          for dir in win32-x64 win32-arm64 linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            if [ -d "$dir/bin" ] && [ "$(ls -A $dir/bin)" ]; then
+              echo "Publishing reverse-engine-$dir..."
+              cd $dir
+              npm publish --access public || echo "Failed to publish $dir (may already exist)"
+              cd ..
+            else
+              echo "Skipping $dir (no binary)"
+            fi
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish main package
+        run: |
+          cd npm-package
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            npm-package/platforms/*/bin/*

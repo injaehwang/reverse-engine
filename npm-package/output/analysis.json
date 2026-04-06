@@ -1,0 +1,535 @@
+{
+  "sourcePath": "../test-fixtures/sample-react",
+  "framework": "React",
+  "components": [
+    {
+      "name": "App",
+      "filePath": "src\\App.tsx",
+      "lineStart": 8,
+      "lineEnd": 20,
+      "componentType": "Widget",
+      "props": [],
+      "children": [
+        "BrowserRouter",
+        "Dashboard",
+        "Layout",
+        "Login",
+        "Route",
+        "Routes",
+        "Settings"
+      ],
+      "usedBy": [],
+      "hooks": [],
+      "apiCalls": []
+    },
+    {
+      "name": "Settings",
+      "filePath": "src\\pages\\Settings.tsx",
+      "lineStart": 4,
+      "lineEnd": 29,
+      "componentType": "Page",
+      "props": [],
+      "children": [],
+      "usedBy": [
+        "App"
+      ],
+      "hooks": [
+        "useState"
+      ],
+      "apiCalls": [
+        "DELETE /api/settings/account",
+        "PUT /api/settings/profile"
+      ]
+    },
+    {
+      "name": "Login",
+      "filePath": "src\\pages\\Login.tsx",
+      "lineStart": 5,
+      "lineEnd": 26,
+      "componentType": "Page",
+      "props": [],
+      "children": [],
+      "usedBy": [
+        "App"
+      ],
+      "hooks": [
+        "useNavigate",
+        "useState"
+      ],
+      "apiCalls": [
+        "POST /api/auth/login"
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "filePath": "src\\pages\\Dashboard.tsx",
+      "lineStart": 10,
+      "lineEnd": 55,
+      "componentType": "Page",
+      "props": [
+        {
+          "name": "userId",
+          "type": "unknown",
+          "required": true
+        }
+      ],
+      "children": [
+        "ActivityFeed",
+        "StatsCard"
+      ],
+      "usedBy": [
+        "App"
+      ],
+      "hooks": [
+        "useEffect",
+        "useState"
+      ],
+      "apiCalls": [
+        "GET /api/export"
+      ]
+    },
+    {
+      "name": "StatsCard",
+      "filePath": "src\\components\\StatsCard.tsx",
+      "lineStart": 9,
+      "lineEnd": 17,
+      "componentType": "Widget",
+      "props": [
+        {
+          "name": "title",
+          "type": "unknown",
+          "required": true
+        },
+        {
+          "name": "value",
+          "type": "unknown",
+          "required": true
+        },
+        {
+          "name": "icon",
+          "type": "unknown",
+          "required": true
+        }
+      ],
+      "children": [],
+      "usedBy": [
+        "Dashboard"
+      ],
+      "hooks": [],
+      "apiCalls": []
+    },
+    {
+      "name": "Layout",
+      "filePath": "src\\components\\Layout.tsx",
+      "lineStart": 8,
+      "lineEnd": 19,
+      "componentType": "Layout",
+      "props": [
+        {
+          "name": "children",
+          "type": "unknown",
+          "required": true
+        }
+      ],
+      "children": [
+        "Link"
+      ],
+      "usedBy": [
+        "App"
+      ],
+      "hooks": [],
+      "apiCalls": []
+    },
+    {
+      "name": "ActivityFeed",
+      "filePath": "src\\components\\ActivityFeed.tsx",
+      "lineStart": 13,
+      "lineEnd": 27,
+      "componentType": "Widget",
+      "props": [
+        {
+          "name": "items",
+          "type": "unknown",
+          "required": true
+        }
+      ],
+      "children": [],
+      "usedBy": [
+        "Dashboard"
+      ],
+      "hooks": [],
+      "apiCalls": []
+    }
+  ],
+  "routes": [
+    {
+      "path": "/",
+      "component": "Dashboard",
+      "filePath": "src\\App.tsx",
+      "guards": []
+    },
+    {
+      "path": "/settings",
+      "component": "Settings",
+      "filePath": "src\\App.tsx",
+      "guards": []
+    },
+    {
+      "path": "/login",
+      "component": "Login",
+      "filePath": "src\\App.tsx",
+      "guards": []
+    }
+  ],
+  "functions": [
+    {
+      "name": "App",
+      "filePath": "src\\App.tsx",
+      "lineStart": 8,
+      "lineEnd": 20,
+      "params": [],
+      "calls": [],
+      "calledBy": [],
+      "isAsync": false,
+      "isExported": true
+    },
+    {
+      "name": "Settings",
+      "filePath": "src\\pages\\Settings.tsx",
+      "lineStart": 4,
+      "lineEnd": 29,
+      "params": [],
+      "calls": [
+        "alert",
+        "confirm",
+        "delete",
+        "handleSave",
+        "preventDefault",
+        "put",
+        "setProfile",
+        "useState"
+      ],
+      "calledBy": [],
+      "isAsync": false,
+      "isExported": true
+    },
+    {
+      "name": "handleSave",
+      "filePath": "src\\pages\\Settings.tsx",
+      "lineStart": 7,
+      "lineEnd": 10,
+      "params": [],
+      "calls": [
+        "alert",
+        "put"
+      ],
+      "calledBy": [
+        "Settings"
+      ],
+      "isAsync": true,
+      "isExported": false
+    },
+    {
+      "name": "handleDeleteAccount",
+      "filePath": "src\\pages\\Settings.tsx",
+      "lineStart": 12,
+      "lineEnd": 16,
+      "params": [],
+      "calls": [
+        "confirm",
+        "delete"
+      ],
+      "calledBy": [],
+      "isAsync": true,
+      "isExported": false
+    },
+    {
+      "name": "Login",
+      "filePath": "src\\pages\\Login.tsx",
+      "lineStart": 5,
+      "lineEnd": 26,
+      "params": [],
+      "calls": [
+        "navigate",
+        "post",
+        "setEmail",
+        "setItem",
+        "setPassword",
+        "useNavigate",
+        "useState"
+      ],
+      "calledBy": [],
+      "isAsync": false,
+      "isExported": true
+    },
+    {
+      "name": "handleLogin",
+      "filePath": "src\\pages\\Login.tsx",
+      "lineStart": 10,
+      "lineEnd": 16,
+      "params": [],
+      "calls": [
+        "navigate",
+        "post",
+        "setItem"
+      ],
+      "calledBy": [],
+      "isAsync": true,
+      "isExported": false
+    },
+    {
+      "name": "Dashboard",
+      "filePath": "src\\pages\\Dashboard.tsx",
+      "lineStart": 10,
+      "lineEnd": 55,
+      "params": [
+        "{...}"
+      ],
+      "calls": [
+        "blob",
+        "fetch",
+        "fetchActivities",
+        "fetchDashboardStats",
+        "loadData",
+        "log",
+        "setActivities",
+        "setLoading",
+        "setStats",
+        "useEffect",
+        "useState"
+      ],
+      "calledBy": [],
+      "isAsync": false,
+      "isExported": true
+    },
+    {
+      "name": "loadData",
+      "filePath": "src\\pages\\Dashboard.tsx",
+      "lineStart": 19,
+      "lineEnd": 26,
+      "params": [],
+      "calls": [
+        "fetchActivities",
+        "fetchDashboardStats",
+        "setActivities",
+        "setLoading",
+        "setStats"
+      ],
+      "calledBy": [
+        "Dashboard",
+        "handleRefresh"
+      ],
+      "isAsync": true,
+      "isExported": false
+    },
+    {
+      "name": "handleRefresh",
+      "filePath": "src\\pages\\Dashboard.tsx",
+      "lineStart": 28,
+      "lineEnd": 30,
+      "params": [],
+      "calls": [
+        "loadData"
+      ],
+      "calledBy": [],
+      "isAsync": true,
+      "isExported": false
+    },
+    {
+      "name": "handleExport",
+      "filePath": "src\\pages\\Dashboard.tsx",
+      "lineStart": 32,
+      "lineEnd": 36,
+      "params": [],
+      "calls": [
+        "blob",
+        "fetch",
+        "log"
+      ],
+      "calledBy": [],
+      "isAsync": true,
+      "isExported": false
+    },
+    {
+      "name": "StatsCard",
+      "filePath": "src\\components\\StatsCard.tsx",
+      "lineStart": 9,
+      "lineEnd": 17,
+      "params": [
+        "{...}"
+      ],
+      "calls": [],
+      "calledBy": [],
+      "isAsync": false,
+      "isExported": true
+    },
+    {
+      "name": "Layout",
+      "filePath": "src\\components\\Layout.tsx",
+      "lineStart": 8,
+      "lineEnd": 19,
+      "params": [
+        "{...}"
+      ],
+      "calls": [],
+      "calledBy": [],
+      "isAsync": false,
+      "isExported": true
+    },
+    {
+      "name": "ActivityFeed",
+      "filePath": "src\\components\\ActivityFeed.tsx",
+      "lineStart": 13,
+      "lineEnd": 27,
+      "params": [
+        "{...}"
+      ],
+      "calls": [
+        "map"
+      ],
+      "calledBy": [],
+      "isAsync": false,
+      "isExported": true
+    },
+    {
+      "name": "fetchDashboardStats",
+      "filePath": "src\\api\\dashboard.ts",
+      "lineStart": 3,
+      "lineEnd": 6,
+      "params": [],
+      "calls": [
+        "get"
+      ],
+      "calledBy": [
+        "Dashboard",
+        "loadData"
+      ],
+      "isAsync": true,
+      "isExported": true
+    },
+    {
+      "name": "fetchActivities",
+      "filePath": "src\\api\\dashboard.ts",
+      "lineStart": 8,
+      "lineEnd": 11,
+      "params": [],
+      "calls": [
+        "get"
+      ],
+      "calledBy": [
+        "Dashboard",
+        "loadData"
+      ],
+      "isAsync": true,
+      "isExported": true
+    },
+    {
+      "name": "createProject",
+      "filePath": "src\\api\\dashboard.ts",
+      "lineStart": 13,
+      "lineEnd": 16,
+      "params": [
+        "name"
+      ],
+      "calls": [
+        "post"
+      ],
+      "calledBy": [],
+      "isAsync": true,
+      "isExported": true
+    }
+  ],
+  "apiClients": [
+    {
+      "method": "PUT",
+      "urlPattern": "/api/settings/profile",
+      "filePath": "src\\pages\\Settings.tsx",
+      "line": 8,
+      "functionName": "handleSave"
+    },
+    {
+      "method": "DELETE",
+      "urlPattern": "/api/settings/account",
+      "filePath": "src\\pages\\Settings.tsx",
+      "line": 14,
+      "functionName": "handleDeleteAccount"
+    },
+    {
+      "method": "POST",
+      "urlPattern": "/api/auth/login",
+      "filePath": "src\\pages\\Login.tsx",
+      "line": 11,
+      "functionName": "handleLogin"
+    },
+    {
+      "method": "POST",
+      "urlPattern": "/api/export",
+      "filePath": "src\\pages\\Dashboard.tsx",
+      "line": 33,
+      "functionName": "handleExport"
+    },
+    {
+      "method": "GET",
+      "urlPattern": "/api/dashboard/stats",
+      "filePath": "src\\api\\dashboard.ts",
+      "line": 4,
+      "functionName": "fetchDashboardStats"
+    },
+    {
+      "method": "GET",
+      "urlPattern": "/api/dashboard/activities",
+      "filePath": "src\\api\\dashboard.ts",
+      "line": 9,
+      "functionName": "fetchActivities"
+    },
+    {
+      "method": "POST",
+      "urlPattern": "/api/projects",
+      "filePath": "src\\api\\dashboard.ts",
+      "line": 14,
+      "functionName": "createProject"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "react",
+      "currentVersion": "^18.2.0",
+      "depType": "Production"
+    },
+    {
+      "name": "react-dom",
+      "currentVersion": "^18.2.0",
+      "depType": "Production"
+    },
+    {
+      "name": "react-router-dom",
+      "currentVersion": "^6.20.0",
+      "depType": "Production"
+    },
+    {
+      "name": "axios",
+      "currentVersion": "^1.6.0",
+      "depType": "Production"
+    },
+    {
+      "name": "zustand",
+      "currentVersion": "^4.4.0",
+      "depType": "Production"
+    },
+    {
+      "name": "typescript",
+      "currentVersion": "^5.3.0",
+      "depType": "Development"
+    },
+    {
+      "name": "@types/react",
+      "currentVersion": "^18.2.0",
+      "depType": "Development"
+    },
+    {
+      "name": "vite",
+      "currentVersion": "^5.0.0",
+      "depType": "Development"
+    }
+  ]
+}

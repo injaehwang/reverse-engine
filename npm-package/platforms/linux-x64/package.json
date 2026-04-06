@@ -1,0 +1,20 @@
+{
+  "name": "reverse-engine-linux-x64",
+  "version": "0.1.0",
+  "description": "reverse-engine native binary for linux-x64",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/injaehwang/revers-eng"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "main": "bin/reverseng",
+  "files": [
+    "bin"
+  ]
+}

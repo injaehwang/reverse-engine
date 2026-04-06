@@ -1,0 +1,28 @@
+graph TD
+    C0["App"]
+    C1["Settings"]
+    C2["Login"]
+    C3["Dashboard"]
+    C4["StatsCard"]
+    C5["Layout"]
+    C6["ActivityFeed"]
+    C0 --> C3
+    C0 --> C5
+    C0 --> C2
+    C0 --> C1
+    C3 --> C6
+    C3 --> C4
+    R0("/") -.-> C3
+    R1("/settings") -.-> C1
+    R2("/login") -.-> C2
+
+    classDef page fill:#e74c3c,color:#fff
+    classDef widget fill:#3498db,color:#fff
+    classDef layout fill:#2ecc71,color:#fff
+    class C0 widget
+    class C1 page
+    class C2 page
+    class C3 page
+    class C4 widget
+    class C5 layout
+    class C6 widget
