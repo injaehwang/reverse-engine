@@ -1,6 +1,6 @@
 {
   "name": "reverse-engine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "웹 서비스 역분석 자동화 도구 - 소스코드 분석, 문서 생성, 테스트 자동화",
   "keywords": [
     "reverse-engineering",
