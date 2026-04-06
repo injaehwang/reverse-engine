@@ -168,10 +168,12 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     }
 
     // ── Step 5: 클릭 탐색 (실패해도 계속) ──
+    let clickInteractions: InteractionResult[] = [];
     try {
       const clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, log);
       ssCounter = clickResults.ssCounter;
       clickDiscovered = clickResults.discoveredUrls;
+      clickInteractions = clickResults.interactions;
       log(`[${pageNum}] 클릭 탐색: ${clickResults.interactions.length}개 요소, 발견 URL ${clickResults.discoveredUrls.length}개`);
     } catch (clickErr: any) {
       log(`[${pageNum}] ⚠ 클릭 탐색 실패: ${clickErr.message}`);
@@ -199,15 +201,21 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       addToQueue(discovered, current.url, current.depth + 1, baseHost, visited, queue);
     }
 
-    // 화면 흐름 기록
+    // 화면 흐름 기록 (트리거에 구체적인 요소 정보 포함)
     const flows: { from: string; trigger: string; to: string }[] = [];
     for (const link of elements.links) {
       if (link.href && link.href !== current.url) {
-        flows.push({ from: current.url, trigger: link.text || link.selector, to: link.href });
+        flows.push({ from: current.url, trigger: `[링크] ${link.text || link.selector}`, to: link.href });
       }
     }
-    for (const disc of clickDiscovered) {
-      flows.push({ from: current.url, trigger: '(클릭)', to: disc });
+    for (const interaction of clickInteractions) {
+      if (interaction.navigatedTo) {
+        flows.push({
+          from: current.url,
+          trigger: `[${interaction.type}] ${interaction.label || interaction.selector}`,
+          to: interaction.navigatedTo,
+        });
+      }
     }
 
     const pageInfo: PageInfo = {

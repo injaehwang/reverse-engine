@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, access } from 'fs/promises';
+import { existsSync } from 'fs';
 import type { AnalysisResult } from '../types.js';
 
 export interface ReportOptions {
@@ -45,42 +46,111 @@ async function generateExcel(data: any, outDir: string): Promise<string> {
     sheet.getRow(1).eachCell(c => { c.style = hs as ExcelJS.Style; });
   };
 
-  // ── 크롤링 결과가 있으면: 화면 목록 + API 호출 시트 ──
+  // ── 공통 요소 식별 (모든 페이지에 나타나는 링크/버튼 제외) ──
   const pages = data.pages || [];
+  let commonLinks = new Set<string>();
+  let commonButtons = new Set<string>();
+
+  if (pages.length > 1) {
+    // 첫 페이지의 링크/버튼으로 시작
+    const firstLinks = new Set((pages[0]?.elements?.links || []).map((l: any) => l.href));
+    const firstButtons = new Set((pages[0]?.elements?.buttons || []).map((b: any) => b.text));
+
+    // 모든 페이지에 공통으로 있는 것만 남기기
+    commonLinks = new Set<string>([...firstLinks].filter((href): href is string =>
+      typeof href === 'string' && pages.every((p: any) => (p.elements?.links || []).some((l: any) => l.href === href))
+    ));
+    commonButtons = new Set<string>([...firstButtons].filter((text): text is string =>
+      typeof text === 'string' && !!text && pages.every((p: any) => (p.elements?.buttons || []).some((b: any) => b.text === text))
+    ));
+  }
+
   if (pages.length > 0) {
-    // 화면 목록
+    // ── 화면 목록 (스크린샷 인라인) ──
     const sp = wb.addWorksheet('화면 목록');
     sp.columns = [
-      { header: 'No', width: 6 }, { header: 'URL', width: 40 },
-      { header: '화면명', width: 25 }, { header: '스크린샷', width: 30 },
-      { header: '링크 수', width: 8 }, { header: '버튼 수', width: 8 },
-      { header: 'API 호출', width: 8 }, { header: '인증필요', width: 8 },
+      { header: 'No', width: 6 }, { header: '스크린샷', width: 25 },
+      { header: 'URL', width: 40 }, { header: '화면명', width: 25 },
+      { header: '고유 링크', width: 10 }, { header: '고유 버튼', width: 10 },
+      { header: 'API 호출', width: 10 },
     ];
     applyHeader(sp);
-    pages.forEach((p: any, i: number) => sp.addRow([
-      i + 1, p.url, p.title || '',
-      p.screenshotPath || '-',
-      p.elements?.links?.length || 0,
-      p.elements?.buttons?.length || 0,
-      p.apiCalls?.length || 0,
-      p.authRequired ? 'Y' : 'N',
-    ]));
 
-    // 화면별 API 호출
-    const sa = wb.addWorksheet('API 호출 (크롤링)');
-    sa.columns = [
+    for (let i = 0; i < pages.length; i++) {
+      const p = pages[i];
+      const uniqueLinks = (p.elements?.links || []).filter((l: any) => !commonLinks.has(l.href));
+      const uniqueButtons = (p.elements?.buttons || []).filter((b: any) => !commonButtons.has(b.text));
+      const uniqueApis = (p.apiCalls || []);
+
+      const rowNum = i + 2; // 헤더가 1행
+      sp.getRow(rowNum).height = 80;
+
+      sp.addRow([
+        i + 1, '', p.url, p.title || '',
+        uniqueLinks.length, uniqueButtons.length, uniqueApis.length,
+      ]);
+
+      // 스크린샷 이미지 삽입
+      if (p.screenshotPath && existsSync(p.screenshotPath)) {
+        try {
+          const imgId = wb.addImage({
+            filename: p.screenshotPath,
+            extension: 'png',
+          });
+          sp.addImage(imgId, {
+            tl: { col: 1, row: rowNum - 1 },
+            ext: { width: 160, height: 100 },
+          });
+        } catch { /* 이미지 삽입 실패 무시 */ }
+      }
+    }
+
+    // ── 페이지별 상세 (링크/버튼/API 각각) ──
+    const sd = wb.addWorksheet('페이지별 상세');
+    sd.columns = [
       { header: 'No', width: 6 }, { header: '화면 URL', width: 35 },
-      { header: 'Method', width: 10 }, { header: 'API URL', width: 50 },
-      { header: 'Status', width: 8 },
+      { header: '종류', width: 10 }, { header: '텍스트/이름', width: 30 },
+      { header: '대상 URL / 셀렉터', width: 50 },
     ];
-    applyHeader(sa);
-    let apiNo = 0;
+    applyHeader(sd);
+    let detailNo = 0;
     pages.forEach((p: any) => {
+      const uniqueLinks = (p.elements?.links || []).filter((l: any) => !commonLinks.has(l.href));
+      const uniqueButtons = (p.elements?.buttons || []).filter((b: any) => !commonButtons.has(b.text));
+
+      uniqueLinks.forEach((l: any) => {
+        detailNo++;
+        sd.addRow([detailNo, p.url, '링크', l.text || '(텍스트 없음)', l.href]);
+      });
+      uniqueButtons.forEach((b: any) => {
+        detailNo++;
+        sd.addRow([detailNo, p.url, '버튼', b.text || '(텍스트 없음)', b.navigatesTo || b.selector]);
+      });
       (p.apiCalls || []).forEach((api: any) => {
-        apiNo++;
-        sa.addRow([apiNo, p.url, api.method, api.url, api.responseStatus]);
+        detailNo++;
+        sd.addRow([detailNo, p.url, `API ${api.method}`, `${api.responseStatus}`, api.url]);
       });
     });
+
+    // ── 공통 네비게이션 (모든 페이지 공통 요소) ──
+    if (commonLinks.size > 0 || commonButtons.size > 0) {
+      const sc = wb.addWorksheet('공통 네비게이션');
+      sc.columns = [
+        { header: 'No', width: 6 }, { header: '종류', width: 10 },
+        { header: '텍스트', width: 25 }, { header: 'URL / 셀렉터', width: 50 },
+      ];
+      applyHeader(sc);
+      let cNo = 0;
+      const firstPage = pages[0];
+      (firstPage?.elements?.links || []).filter((l: any) => commonLinks.has(l.href)).forEach((l: any) => {
+        cNo++;
+        sc.addRow([cNo, '링크', l.text, l.href]);
+      });
+      (firstPage?.elements?.buttons || []).filter((b: any) => commonButtons.has(b.text)).forEach((b: any) => {
+        cNo++;
+        sc.addRow([cNo, '버튼', b.text, b.selector]);
+      });
+    }
 
     // 화면 흐름
     const sf = wb.addWorksheet('화면 흐름');
