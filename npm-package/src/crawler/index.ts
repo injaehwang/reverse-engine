@@ -89,11 +89,18 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     visited.add(normalizedUrl);
 
     const page = await context.newPage();
-    try {
-      log(`[${result.pages.length + 1}] 페이지 로드: ${current.url}`);
+    const pageNum = result.pages.length + 1;
+    log(`[${pageNum}] ── 시작: ${current.url} (depth=${current.depth})`);
 
-      // ── 네트워크 인터셉트 ──
-      const apiCalls: PageInfo['apiCalls'] = [];
+    // 이 페이지의 수집 결과 (각 단계가 실패해도 부분 결과 보존)
+    const apiCalls: PageInfo['apiCalls'] = [];
+    let title = '';
+    let screenshotPath: string | null = null;
+    let elements = { links: [] as any[], buttons: [] as any[], forms: [] as any[] };
+    let clickDiscovered: string[] = [];
+
+    try {
+      // ── Step 1: 네트워크 인터셉트 ──
       page.on('response', (response) => {
         try {
           const req = response.request();
@@ -109,103 +116,87 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
         } catch { /* ignore */ }
       });
 
-      // ── 페이지 로드 (SPA 대응: domcontentloaded 후 추가 대기) ──
-      const response = await page.goto(current.url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000,
-      });
+      // ── Step 2: 페이지 로드 ──
+      log(`[${pageNum}] 로드 중...`);
+      await page.goto(current.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-      // 로그인 리다이렉트 감지: URL이 다른 도메인으로 바뀌었으면 로그인 필요
+      // 리다이렉트 감지
       const currentHost = new URL(page.url()).hostname;
       if (currentHost !== baseHost) {
-        log(`  ⚠ 리다이렉트: ${page.url()} (다른 도메인 → skip)`);
+        log(`[${pageNum}] ⚠ 다른 도메인으로 리다이렉트: ${page.url()} → skip`);
         await page.close();
         continue;
       }
 
       // SPA 렌더링 대기
-      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForLoadState('networkidle').catch(() => {
+        log(`[${pageNum}] networkidle 타임아웃 (계속 진행)`);
+      });
       await page.waitForTimeout(waitTime);
 
-      const title = await page.title();
-      log(`  제목: ${title || '(없음)'}`);
+      title = await page.title().catch(() => '') || '';
+      log(`[${pageNum}] 로드 완료: "${title}" (${page.url()})`);
+    } catch (loadErr: any) {
+      log(`[${pageNum}] ✗ 페이지 로드 실패: ${loadErr.message}`);
+      await page.close();
+      continue; // 로드 자체 실패하면 건너뜀
+    }
 
-      // ── DOM 스캔 ──
-      let elements: Awaited<ReturnType<typeof scanDOM>>;
+    // ── Step 3: DOM 스캔 (실패해도 계속) ──
+    try {
+      elements = await scanDOM(page);
+      log(`[${pageNum}] DOM: 링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, 폼 ${elements.forms.length}`);
+    } catch (domErr: any) {
+      log(`[${pageNum}] ⚠ DOM 스캔 실패: ${domErr.message}`);
+    }
+
+    // ── Step 4: 스크린샷 (실패해도 계속) ──
+    if (screenshot) {
       try {
-        elements = await scanDOM(page);
-      } catch (domErr: any) {
-        log(`  ⚠ DOM 스캔 에러: ${domErr.message}`);
-        elements = { links: [], buttons: [], forms: [] };
-      }
-
-      // ── 스크린샷 ──
-      let screenshotPath: string | null = null;
-      if (screenshot) {
         ssCounter++;
         const ssName = `${String(ssCounter).padStart(3, '0')}_page_${safePath(current.url)}.png`;
         screenshotPath = join(screenshotDir, ssName);
-        await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-        log(`  📷 스크린샷: ${ssName}`);
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        log(`[${pageNum}] 📷 ${ssName}`);
+      } catch (ssErr: any) {
+        log(`[${pageNum}] ⚠ 스크린샷 실패: ${ssErr.message}`);
+        screenshotPath = null;
       }
-
-      // ── 클릭 탐색 ──
-      log(`  DOM: 링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, 폼 ${elements.forms.length}`);
-
-      let clickResults: Awaited<ReturnType<typeof probeClickables>>;
-      try {
-        clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, log);
-      } catch (clickErr: any) {
-        log(`  ⚠ 클릭 탐색 중 에러 (건너뜀): ${clickErr.message}`);
-        clickResults = { interactions: [], discoveredUrls: [], screenshots: [], ssCounter };
-      }
-      ssCounter = clickResults.ssCounter;
-
-      // 발견된 URL 큐에 추가
-      for (const link of elements.links) {
-        addToQueue(link.href, current.url, current.depth + 1, baseHost, visited, queue);
-      }
-      for (const discovered of clickResults.discoveredUrls) {
-        addToQueue(discovered, current.url, current.depth + 1, baseHost, visited, queue);
-      }
-
-      // 클릭으로 발견된 버튼 merge
-      for (const cr of clickResults.interactions) {
-        const btn = elements.buttons.find(b => b.selector === cr.selector);
-        if (btn) btn.navigatesTo = cr.navigatedTo;
-      }
-
-      const pageInfo: PageInfo = {
-        url: current.url,
-        title,
-        screenshotPath,
-        elements: {
-          ...elements,
-          buttons: [
-            ...elements.buttons,
-            ...clickResults.interactions
-              .filter(i => i.type === 'modal' || i.type === 'popup')
-              .map(i => ({ text: i.label, selector: i.selector, navigatesTo: i.navigatedTo })),
-          ],
-        },
-        apiCalls,
-        navigatesTo: [...new Set([...elements.links.map(l => l.href), ...clickResults.discoveredUrls])],
-        authRequired: false,
-      };
-
-      if (clickResults.screenshots.length > 0) {
-        (pageInfo as any).interactionScreenshots = clickResults.screenshots;
-      }
-
-      result.pages.push(pageInfo);
-      log(`[${result.pages.length}] ✓ 완료: ${title || current.url} (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length}, 큐 ${queue.length})`);
-    } catch (err: any) {
-      log(`  ✗ 에러: ${current.url}`);
-      log(`    메시지: ${err.message || 'unknown'}`);
-      log(`    스택: ${(err.stack || '').split('\n').slice(0, 3).join(' | ')}`);
-    } finally {
-      await page.close();
     }
+
+    // ── Step 5: 클릭 탐색 (실패해도 계속) ──
+    try {
+      const clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, log);
+      ssCounter = clickResults.ssCounter;
+      clickDiscovered = clickResults.discoveredUrls;
+      log(`[${pageNum}] 클릭 탐색: ${clickResults.interactions.length}개 요소, 발견 URL ${clickResults.discoveredUrls.length}개`);
+    } catch (clickErr: any) {
+      log(`[${pageNum}] ⚠ 클릭 탐색 실패: ${clickErr.message}`);
+    }
+
+    // ── Step 6: 결과 저장 (무조건) ──
+    // 큐에 새 URL 추가
+    for (const link of elements.links) {
+      addToQueue(link.href, current.url, current.depth + 1, baseHost, visited, queue);
+    }
+    for (const discovered of clickDiscovered) {
+      addToQueue(discovered, current.url, current.depth + 1, baseHost, visited, queue);
+    }
+
+    const pageInfo: PageInfo = {
+      url: current.url,
+      title,
+      screenshotPath,
+      elements,
+      apiCalls,
+      navigatesTo: [...new Set([...elements.links.map(l => l.href), ...clickDiscovered])],
+      authRequired: false,
+    };
+
+    result.pages.push(pageInfo);
+    log(`[${pageNum}] ✓ 저장 완료 (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length}, 큐 ${queue.length})`);
+
+    await page.close();
 
     // 매 페이지마다 로그 flush
     await flushLog();
