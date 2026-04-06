@@ -81,6 +81,18 @@ function buildAuth(opts: any, baseUrl: string) {
   return Object.keys(auth).length > 0 ? auth : undefined;
 }
 
+/** 한 줄 진행 표시 (같은 줄 덮어쓰기) */
+function progressLine(current: number, total: number, file: string) {
+  const pct = Math.round((current / total) * 100);
+  const short = file.length > 50 ? '...' + file.slice(-47) : file;
+  const line = `  ${chalk.dim(`[${current}/${total}]`)} ${chalk.dim(`${pct}%`)} ${short}`;
+  process.stdout.write(`\r\x1b[K${line}`);
+}
+
+function clearLine() {
+  process.stdout.write('\r\x1b[K');
+}
+
 const nativeBin = findNativeBinary();
 const program = new Command();
 
@@ -116,7 +128,9 @@ program
     const result = await analyze(sourcePath, {
       framework: opts.framework,
       include: opts.include?.split(','),
+      onProgress: progressLine,
     });
+    clearLine();
 
     console.log(chalk.green('✓'), '분석 완료!');
     console.log(`  프레임워크: ${result.framework}`);
@@ -293,7 +307,8 @@ program
       if (nativeBin) {
         runNative(['analyze', sourcePath, '--framework', opts.framework || 'auto']);
       } else {
-        const result = await analyze(sourcePath, { framework: opts.framework });
+        const result = await analyze(sourcePath, { framework: opts.framework, onProgress: progressLine });
+        clearLine();
         console.log(chalk.green('✓'), `분석: 컴포넌트 ${result.components.length} | 함수 ${result.functions.length} | API ${result.apiClients.length} | 라우트 ${result.routes.length}`);
         await writeFile(analysisPath, JSON.stringify(result, null, 2));
       }
@@ -344,7 +359,8 @@ program
     const analysisPath = join(outputDir, 'analysis.json');
 
     console.log(chalk.gray('━'.repeat(50)));
-    const result = await analyze(sourcePath, {});
+    const result = await analyze(sourcePath, { onProgress: progressLine });
+    clearLine();
     console.log(chalk.green('✓'), `분석: 컴포넌트 ${result.components.length} | 함수 ${result.functions.length} | API ${result.apiClients.length} | 라우트 ${result.routes.length}`);
     await writeFile(analysisPath, JSON.stringify(result, null, 2));
 

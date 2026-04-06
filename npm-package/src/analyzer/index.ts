@@ -12,6 +12,7 @@ export interface AnalyzeOptions {
   include?: string[];
   exclude?: string[];
   framework?: string;
+  onProgress?: (current: number, total: number, file: string) => void;
 }
 
 export async function analyze(sourcePath: string, options: AnalyzeOptions = {}): Promise<AnalysisResult> {
@@ -47,23 +48,29 @@ export async function analyze(sourcePath: string, options: AnalyzeOptions = {}):
   let routes: RouteInfo[] = [];
 
   // 각 파일 분석
-  for (const file of files) {
+  let errorCount = 0;
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     const fullPath = join(sourcePath, file);
-    const source = await readFile(fullPath, 'utf-8');
-    const ext = extname(file);
 
+    options.onProgress?.(i + 1, files.length, file);
+
+    let source: string;
     try {
-      const fileComponents = extractComponents(source, file, ext);
-      const fileFunctions = extractFunctions(source, file, ext);
-      const fileApiCalls = extractApiCalls(source, file, ext);
-      const fileRoutes = extractRoutes(source, file, ext);
-
-      components.push(...fileComponents);
-      functions.push(...fileFunctions);
-      apiClients.push(...fileApiCalls);
-      routes.push(...fileRoutes);
+      source = await readFile(fullPath, 'utf-8');
     } catch {
-      // 파싱 실패한 파일은 건너뜀
+      errorCount++;
+      continue;
+    }
+
+    const ext = extname(file);
+    try {
+      components.push(...extractComponents(source, file, ext));
+      functions.push(...extractFunctions(source, file, ext));
+      apiClients.push(...extractApiCalls(source, file, ext));
+      routes.push(...extractRoutes(source, file, ext));
+    } catch {
+      errorCount++;
     }
   }
 

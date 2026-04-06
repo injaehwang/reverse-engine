@@ -15,7 +15,15 @@ export async function generateReport(data: AnalysisResult, options: ReportOption
   const outputs: string[] = [];
 
   if (formats.includes('excel')) {
-    outputs.push(await generateExcel(data, outputDir));
+    try {
+      outputs.push(await generateExcel(data, outputDir));
+    } catch (e: any) {
+      if (e.code === 'EBUSY') {
+        console.log('  ⚠ Excel 파일이 열려 있어 덮어쓸 수 없습니다. 파일을 닫고 다시 시도하세요.');
+      } else {
+        throw e;
+      }
+    }
   }
   if (formats.includes('mermaid')) {
     outputs.push(await generateMermaid(data, outputDir));
