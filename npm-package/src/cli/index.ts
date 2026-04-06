@@ -330,10 +330,14 @@ program
     const hasCrawl = existsSync(crawlResultPath);
 
     if (hasAnalysis || hasCrawl) {
-      // 리포트 데이터 결정 (분석 결과 우선, 없으면 크롤링 결과)
-      const reportData = hasAnalysis
-        ? JSON.parse(await readFile(analysisPath, 'utf-8'))
-        : JSON.parse(await readFile(crawlResultPath, 'utf-8'));
+      // 분석 + 크롤링 결과 합치기
+      const reportData: any = {};
+      if (hasAnalysis) Object.assign(reportData, JSON.parse(await readFile(analysisPath, 'utf-8')));
+      if (hasCrawl) {
+        const crawlData = JSON.parse(await readFile(crawlResultPath, 'utf-8'));
+        reportData.pages = crawlData.pages;
+        reportData.targetUrl = crawlData.targetUrl;
+      }
 
       console.log(chalk.gray('━'.repeat(50)));
       const reports = await generateReport(reportData, { outputDir: join(outputDir, 'reports') });
