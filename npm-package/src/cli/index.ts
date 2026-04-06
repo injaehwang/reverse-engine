@@ -83,9 +83,16 @@ function buildAuth(opts: any, baseUrl: string) {
 
 /** 한 줄 진행 표시 (같은 줄 덮어쓰기) */
 function progressLine(current: number, total: number, file: string) {
-  const pct = Math.round((current / total) * 100);
-  const short = file.length > 50 ? '...' + file.slice(-47) : file;
-  const line = `  ${chalk.dim(`[${current}/${total}]`)} ${chalk.dim(`${pct}%`)} ${short}`;
+  let line: string;
+  if (total > 0) {
+    const pct = Math.round((current / total) * 100);
+    const short = file.length > 60 ? '...' + file.slice(-57) : file;
+    line = `  ${chalk.dim(`[${current}/${total}]`)} ${chalk.dim(`${pct}%`)} ${short}`;
+  } else {
+    // 크롤링 등 전체 수를 모를 때
+    const short = file.length > 70 ? '...' + file.slice(-67) : file;
+    line = `  ${chalk.dim('›')} ${short}`;
+  }
   process.stdout.write(`\r\x1b[K${line}`);
 }
 
@@ -230,8 +237,10 @@ program
       outputDir,
       waitTime: parseInt(opts.wait),
       auth: buildAuth(opts, url),
+      onProgress: (msg) => progressLine(0, 0, msg),
     });
 
+    clearLine();
     console.log(chalk.green('✓'), `크롤링 완료!`);
     console.log(`  페이지: ${result.pages.length}개`);
     console.log(`  API 호출: ${result.pages.reduce((n, p) => n + p.apiCalls.length, 0)}개`);
@@ -294,8 +303,10 @@ program
         headless: opts.headless !== false,
         waitTime: parseInt(opts.wait),
         auth,
+        onProgress: (msg) => progressLine(0, 0, msg),
       });
 
+      clearLine();
       const totalApi = crawlResult.pages.reduce((n, p) => n + p.apiCalls.length, 0);
       console.log(chalk.green('✓'), `크롤링: 페이지 ${crawlResult.pages.length} | API ${totalApi} | 스크린샷 ${crawlResult.pages.filter(p => p.screenshotPath).length}`);
       await writeFile(crawlResultPath, JSON.stringify(crawlResult, null, 2));
