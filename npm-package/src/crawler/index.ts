@@ -37,6 +37,22 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     onProgress,
   } = options;
 
+  // ── 로그 파일 ──
+  await mkdir(outputDir, { recursive: true });
+  const logPath = join(outputDir, 'crawl.log');
+  const logLines: string[] = [];
+  const log = (msg: string) => {
+    const ts = new Date().toISOString().slice(11, 23);
+    logLines.push(`[${ts}] ${msg}`);
+    onProgress?.(msg);
+  };
+  const flushLog = async () => {
+    await writeFile(logPath, logLines.join('\n'), 'utf-8');
+  };
+
+  log(`크롤링 시작: ${url}`);
+  log(`설정: maxDepth=${maxDepth}, maxPages=${maxPages}, headless=${headless}, waitTime=${waitTime}`);
+
   const screenshotDir = join(outputDir, 'screenshots');
   if (screenshot) await mkdir(screenshotDir, { recursive: true });
 
@@ -49,8 +65,8 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
 
   // ── 인증 ──
   if (options.auth) {
-    onProgress?.('로그인 처리 중...');
-    await handleAuth(context, url, options.auth, onProgress);
+    log('로그인 처리 중...');
+    await handleAuth(context, url, options.auth, log);
   }
 
   const result: CrawlResult = {
@@ -74,7 +90,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
 
     const page = await context.newPage();
     try {
-      onProgress?.(`[${result.pages.length + 1}] ${current.url}`);
+      log(`[${result.pages.length + 1}] 페이지 로드: ${current.url}`);
 
       // ── 네트워크 인터셉트 ──
       const apiCalls: PageInfo['apiCalls'] = [];
@@ -102,7 +118,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       // 로그인 리다이렉트 감지: URL이 다른 도메인으로 바뀌었으면 로그인 필요
       const currentHost = new URL(page.url()).hostname;
       if (currentHost !== baseHost) {
-        onProgress?.(`  ⚠ 리다이렉트 감지: ${page.url()} (인증 필요?)`);
+        log(`  ⚠ 리다이렉트: ${page.url()} (다른 도메인 → skip)`);
         await page.close();
         continue;
       }
@@ -112,7 +128,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       await page.waitForTimeout(waitTime);
 
       const title = await page.title();
-      onProgress?.(`[${result.pages.length + 1}] ${title || current.url}`);
+      log(`  제목: ${title || '(없음)'}`);
 
       // ── DOM 스캔 ──
       const elements = await scanDOM(page);
@@ -124,11 +140,13 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
         const ssName = `${String(ssCounter).padStart(3, '0')}_page_${safePath(current.url)}.png`;
         screenshotPath = join(screenshotDir, ssName);
         await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
-        if (screenshotPath) onProgress?.(`  📷 ${ssName}`);
+        log(`  📷 스크린샷: ${ssName}`);
       }
 
       // ── 클릭 탐색 ──
-      const clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, onProgress);
+      log(`  DOM: 링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, 폼 ${elements.forms.length}`);
+
+      const clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, log);
       ssCounter = clickResults.ssCounter;
 
       // 발견된 URL 큐에 추가
@@ -168,14 +186,21 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       }
 
       result.pages.push(pageInfo);
-      onProgress?.(`[${result.pages.length}] ✓ ${title || current.url} (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length})`);
+      log(`[${result.pages.length}] ✓ 완료: ${title || current.url} (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length}, 큐 ${queue.length})`);
     } catch (err: any) {
-      // 에러를 삼키지 않고 표시
-      onProgress?.(`  ✗ ${current.url}: ${err.message?.slice(0, 80) || 'unknown error'}`);
+      log(`  ✗ 에러: ${current.url}`);
+      log(`    메시지: ${err.message || 'unknown'}`);
+      log(`    스택: ${(err.stack || '').split('\n').slice(0, 3).join(' | ')}`);
     } finally {
       await page.close();
     }
+
+    // 매 페이지마다 로그 flush
+    await flushLog();
   }
+
+  log(`크롤링 종료: 페이지 ${result.pages.length}, 큐 잔여 ${queue.length}, 방문 ${visited.size}`);
+  await flushLog();
 
   await browser.close();
   return result;
@@ -192,7 +217,7 @@ function addToQueue(href: string, baseUrl: string, depth: number, baseHost: stri
 
 // ─── 인증 (Keycloak / 일반 폼 / 쿠키 / Bearer) ───
 
-async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOptions, onProgress?: (msg: string) => void) {
+async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOptions, onProgress: (msg: string) => void) {
   const host = new URL(baseUrl).hostname;
 
   if (auth.cookie) {
@@ -381,7 +406,7 @@ interface InteractionResult {
 
 async function probeClickables(
   page: Page, screenshotDir: string, screenshot: boolean,
-  ssCounter: number, waitTime: number, onProgress?: (msg: string) => void,
+  ssCounter: number, waitTime: number, log: (msg: string) => void,
 ): Promise<{ interactions: InteractionResult[]; discoveredUrls: string[]; screenshots: string[]; ssCounter: number }> {
   const interactions: InteractionResult[] = [];
   const discoveredUrls: string[] = [];
@@ -468,7 +493,7 @@ async function probeClickables(
         await page.screenshot({ path: ssPath, fullPage: false }).catch(() => {});
         screenshots.push(ssPath);
         interactions.push({ selector: target.selector, label: target.label, type, navigatedTo, screenshotPath: ssPath });
-        onProgress?.(`  📷 ${type}: ${target.label || target.selector}`);
+        log(`  📷 ${type}: ${target.label || target.selector}`);
       } else {
         interactions.push({ selector: target.selector, label: target.label, type, navigatedTo, screenshotPath: null });
       }
