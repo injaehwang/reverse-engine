@@ -1,0 +1,39 @@
+# ReversEngine 설정 파일 예시
+# 프로젝트 루트에 reverseng.config.toml로 복사하여 사용
+
+[target]
+# url = "https://my-service.com"
+# source_path = "./my-project"
+
+[crawler]
+max_depth = 5
+max_pages = 100
+timeout_ms = 30000
+wait_after_click_ms = 1000
+viewport_width = 1920
+viewport_height = 1080
+ignore_patterns = ["/logout", "/external-*"]
+
+# [crawler.auth]
+# auth_type = "form"
+# login_url = "/login"
+# submit_selector = "#btn-login"
+# cookie = "session=abc123"
+# bearer_token = "eyJ..."
+
+[analyzer]
+framework = "auto"
+include = ["src/**/*.{ts,tsx,js,jsx,vue}"]
+exclude = ["node_modules", "dist", "*.test.*"]
+router_file = "auto"
+
+[output]
+dir = "./output"
+formats = ["excel", "html", "markdown"]
+screenshots = true
+mermaid = true
+
+[testgen]
+types = ["e2e", "api"]
+output_dir = "./tests/generated"
+base_url = "http://localhost:3000"

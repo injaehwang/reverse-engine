@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CrawlResult",
+  "description": "Rust ↔ Node.js 간 크롤링 결과 교환 스키마",
+  "type": "object",
+  "required": ["targetUrl", "pages", "timestamp"],
+  "properties": {
+    "targetUrl": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["url", "title", "elements", "navigatesTo"],
+        "properties": {
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "screenshotPath": { "type": ["string", "null"] },
+          "authRequired": { "type": "boolean" },
+          "elements": {
+            "type": "object",
+            "properties": {
+              "links": { "type": "array" },
+              "buttons": { "type": "array" },
+              "forms": { "type": "array" }
+            }
+          },
+          "apiCalls": { "type": "array" },
+          "navigatesTo": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

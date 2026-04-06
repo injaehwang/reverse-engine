@@ -1,0 +1,27 @@
+# Rust
+target/
+Cargo.lock
+
+# Node.js
+node_modules/
+dist/
+*.tsbuildinfo
+pnpm-lock.yaml
+
+# Output
+output/screenshots/
+output/reports/
+output/tests/
+*.db
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local

@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "workspaces": [
+    "node/crawler",
+    "node/docgen",
+    "node/testgen"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:crawler": "pnpm -C node/crawler build",
+    "build:docgen": "pnpm -C node/docgen build",
+    "build:testgen": "pnpm -C node/testgen build"
+  }
+}

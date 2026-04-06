@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/reverseng-core",
+    "crates/reverseng-analyzer",
+    "crates/reverseng-mapper",
+    "crates/reverseng-upgrader",
+    "crates/reverseng-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["ReversEngine Team"]
+
+[workspace.dependencies]
+# 직렬화
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive", "color"] }
+
+# 코드 분석
+tree-sitter = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-python = "0.23"
+
+# DB
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# 비동기/병렬
+tokio = { version = "1", features = ["full"] }
+rayon = "1.10"
+
+# 파일 탐색
+walkdir = "2"
+glob = "0.3"
+
+# 유틸리티
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+colored = "3"
+indicatif = "0.17"   # 프로그레스 바
+
+# 내부 크레이트
+reverseng-core = { path = "crates/reverseng-core" }
+reverseng-analyzer = { path = "crates/reverseng-analyzer" }
+reverseng-mapper = { path = "crates/reverseng-mapper" }
+reverseng-upgrader = { path = "crates/reverseng-upgrader" }

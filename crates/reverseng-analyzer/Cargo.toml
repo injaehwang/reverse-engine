@@ -1,0 +1,19 @@
+[package]
+name = "reverseng-analyzer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+reverseng-core.workspace = true
+tree-sitter.workspace = true
+tree-sitter-typescript.workspace = true
+tree-sitter-javascript.workspace = true
+tree-sitter-python.workspace = true
+walkdir.workspace = true
+glob.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
