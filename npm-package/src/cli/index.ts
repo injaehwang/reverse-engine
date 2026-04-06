@@ -81,19 +81,46 @@ function buildAuth(opts: any, baseUrl: string) {
   return Object.keys(auth).length > 0 ? auth : undefined;
 }
 
+// ─── 분석 메시지 ───
+
+const analyzeVerbs = [
+  '구조 파악 중', '코드 읽는 중', '흐름 추적 중', '의도 분석 중', '패턴 파악 중',
+  '관계 정리 중', '구성 이해 중', '설계 해독 중', '로직 추적 중', '맥락 파악 중',
+  '호출 관계 분석 중', '데이터 흐름 추적 중', '컴포넌트 매핑 중', '의존성 확인 중',
+];
+
+const crawlVerbs = [
+  '화면 살펴보는 중', '기능 확인 중', '화면 구성 파악 중', '동작 관찰 중',
+  '흐름 따라가는 중', '화면 이동 확인 중', '연결 관계 파악 중', '기능 탐색 중',
+  '프로젝트 의도 파악 중', '서비스 구조 이해 중', '사용자 경험 추적 중',
+  '화면 전환 관찰 중', '인터랙션 분석 중', 'UI 구조 파악 중',
+];
+
+function pick(arr: string[]): string {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 /** 한 줄 진행 표시 (같은 줄 덮어쓰기) */
 function progressLine(current: number, total: number, file: string) {
   let line: string;
   if (total > 0) {
     const pct = Math.round((current / total) * 100);
-    const short = file.length > 60 ? '...' + file.slice(-57) : file;
-    line = `  ${chalk.dim(`[${current}/${total}]`)} ${chalk.dim(`${pct}%`)} ${short}`;
+    const short = file.length > 55 ? '...' + file.slice(-52) : file;
+    const verb = pick(analyzeVerbs);
+    const bar = makeBar(pct);
+    line = `  ${chalk.dim(bar)} ${chalk.yellow(verb)} ${short}`;
   } else {
-    // 크롤링 등 전체 수를 모를 때
-    const short = file.length > 70 ? '...' + file.slice(-67) : file;
-    line = `  ${chalk.dim('›')} ${short}`;
+    const short = file.length > 60 ? '...' + file.slice(-57) : file;
+    const verb = pick(crawlVerbs);
+    line = `  ${chalk.cyan('🔍')} ${chalk.yellow(verb)} ${short}`;
   }
   process.stdout.write(`\r\x1b[K${line}`);
+}
+
+function makeBar(pct: number): string {
+  const filled = Math.round(pct / 5);
+  const empty = 20 - filled;
+  return `[${'█'.repeat(filled)}${'░'.repeat(empty)}] ${pct}%`;
 }
 
 function clearLine() {

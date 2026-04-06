@@ -50,7 +50,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     await writeFile(logPath, logLines.join('\n'), 'utf-8');
   };
 
-  log(`크롤링 시작: ${url}`);
+  log(`🔍 서비스 분석 시작: ${url}`);
   log(`설정: maxDepth=${maxDepth}, maxPages=${maxPages}, headless=${headless}, waitTime=${waitTime}`);
 
   const screenshotDir = join(outputDir, 'screenshots');
@@ -138,7 +138,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       await page.waitForTimeout(waitTime);
 
       title = await page.title().catch(() => '') || '';
-      log(`[${pageNum}] 로드 완료: "${title}" (${page.url()})`);
+      log(`[${pageNum}] 화면 확인: "${title}" (${page.url()})`);
     } catch (loadErr: any) {
       log(`[${pageNum}] ✗ 페이지 로드 실패: ${loadErr.message}`);
       await page.close();
@@ -148,7 +148,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     // ── Step 3: DOM 스캔 (실패해도 계속) ──
     try {
       elements = await scanDOM(page);
-      log(`[${pageNum}] DOM: 링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, 폼 ${elements.forms.length}`);
+      log(`[${pageNum}] 구성 파악: 링크 ${elements.links.length}개, 버튼 ${elements.buttons.length}개, 폼 ${elements.forms.length}개`);
     } catch (domErr: any) {
       log(`[${pageNum}] ⚠ DOM 스캔 실패: ${domErr.message}`);
     }
@@ -174,7 +174,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       ssCounter = clickResults.ssCounter;
       clickDiscovered = clickResults.discoveredUrls;
       clickInteractions = clickResults.interactions;
-      log(`[${pageNum}] 클릭 탐색: ${clickResults.interactions.length}개 요소, 발견 URL ${clickResults.discoveredUrls.length}개`);
+      log(`[${pageNum}] 요소 ${clickResults.interactions.length}개 확인, 새 화면 ${clickResults.discoveredUrls.length}개 발견`);
     } catch (clickErr: any) {
       log(`[${pageNum}] ⚠ 클릭 탐색 실패: ${clickErr.message}`);
     }
@@ -231,7 +231,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     (pageInfo as any).formScreenshots = formScreenshots;
 
     result.pages.push(pageInfo);
-    log(`[${pageNum}] ✓ 저장 완료 (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length}, 폼 ${elements.forms.length}, 큐 ${queue.length})`);
+    log(`[${pageNum}] ✓ 정리 완료 (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length}, 대기 ${queue.length}건)`);
 
     await page.close();
 
@@ -239,7 +239,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     await flushLog();
   }
 
-  log(`크롤링 종료: 페이지 ${result.pages.length}, 큐 잔여 ${queue.length}, 방문 ${visited.size}`);
+  log(`🏁 분석 완료! 총 ${result.pages.length}개 화면 정리, ${visited.size}개 경로 확인`);
   await flushLog();
 
   await browser.close();
@@ -625,10 +625,29 @@ async function probeClickables(
       node = walker.nextNode();
     }
 
-    return targets.slice(0, 50); // 최대 50개
+    // v-for / map() 등 반복 요소 중복 제거:
+    // 같은 태그 + 같은 크기(±10px) 요소가 3개 이상이면 대표 2개만 남김
+    const grouped = new Map<string, typeof targets>();
+    for (const t of targets) {
+      const key = `${t.tag}_${Math.round(t.w / 10) * 10}_${Math.round(t.h / 10) * 10}`;
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key)!.push(t);
+    }
+
+    const deduped: typeof targets = [];
+    for (const [, group] of grouped) {
+      if (group.length >= 3) {
+        // 반복 요소 → 처음 2개만 (대표 샘플)
+        deduped.push(group[0], group[1]);
+      } else {
+        deduped.push(...group);
+      }
+    }
+
+    return deduped.slice(0, 50);
   });
 
-  log(`  클릭 대상: ${clickTargets.length}개 요소`);
+  log(`  클릭 대상: ${clickTargets.length}개 (반복 요소는 대표 2개만 샘플링)`);
 
   for (let i = 0; i < clickTargets.length; i++) {
     const target = clickTargets[i];
@@ -745,7 +764,7 @@ async function probeForms(
 
   if (formInfos.length === 0) return { discoveredUrls, screenshots, ssCounter };
 
-  log(`  폼 발견: ${formInfos.length}개`);
+  log(`  📝 폼 ${formInfos.length}개 발견, 입력 흐름 따라가는 중...`);
 
   for (const formInfo of formInfos) {
     log(`  폼 #${formInfo.index}: ${formInfo.fieldCount}개 필드`);
