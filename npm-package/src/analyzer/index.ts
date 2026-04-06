@@ -1,5 +1,5 @@
-import { readFile, readdir, stat } from 'fs/promises';
-import { join, relative, extname, basename } from 'path';
+import { readFile } from 'fs/promises';
+import { join, extname } from 'path';
 import { glob } from 'glob';
 import type { AnalysisResult, ComponentInfo, FunctionInfo, ApiClientCall, RouteInfo, DependencyInfo } from '../types.js';
 import { extractComponents } from './extractors/component.js';
@@ -20,7 +20,19 @@ export async function analyze(sourcePath: string, options: AnalyzeOptions = {}):
     : await detectFramework(sourcePath);
 
   const include = options.include || ['**/*.{ts,tsx,js,jsx,mjs,vue}'];
-  const exclude = options.exclude || ['node_modules/**', 'dist/**', 'build/**', '.next/**', '**/*.test.*', '**/*.spec.*'];
+  const exclude = options.exclude || [
+    '**/node_modules/**',
+    '**/dist/**',
+    '**/build/**',
+    '**/.next/**',
+    '**/.reverse-engine/**',
+    '**/*.test.*',
+    '**/*.spec.*',
+    '**/*.min.js',
+    '**/*.bundle.js',
+    '**/vendor/**',
+    '**/__pycache__/**',
+  ];
 
   // 파일 수집
   const files = await glob(include, {
