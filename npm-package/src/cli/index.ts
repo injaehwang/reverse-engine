@@ -8,6 +8,7 @@ import { execFileSync } from 'child_process';
 import { dirname, join, resolve } from 'path';
 import { createRequire } from 'module';
 import { analyze } from '../analyzer/index.js';
+import { crawl } from '../crawler/index.js';
 import { generateReport } from '../docgen/index.js';
 import { generateTests } from '../testgen/index.js';
 
@@ -161,27 +162,104 @@ program
     files.forEach(p => console.log(`  → ${chalk.cyan(p)}`));
   });
 
+// ─── crawl ───
+
+program
+  .command('crawl')
+  .argument('[url]', '크롤링 대상 URL')
+  .option('--max-depth <n>', '최대 탐색 깊이', '5')
+  .option('--max-pages <n>', '최대 페이지 수', '100')
+  .option('--no-screenshot', '스크린샷 비활성화')
+  .option('--no-headless', '브라우저 표시 (디버깅용)')
+  .option('--auth-cookie <cookie>', '인증 쿠키 (name=value;name2=value2)')
+  .option('--auth-bearer <token>', 'Bearer 토큰')
+  .option('--login-url <url>', '로그인 페이지 URL')
+  .option('--login-id <id>', '로그인 ID 필드값')
+  .option('--login-pw <pw>', '로그인 PW 필드값')
+  .option('--wait <ms>', '페이지 로드 후 대기시간(ms)', '1500')
+  .option('-o, --output <dir>', '출력 디렉토리')
+  .description('실행 중인 서비스를 브라우저로 크롤링하여 화면/API 수집')
+  .action(async (url: string | undefined, opts: any) => {
+    if (!url) {
+      console.log(chalk.red('✗'), 'URL을 입력하세요: reverse-engine crawl http://localhost:3000');
+      process.exit(1);
+    }
+
+    const outputDir = opts.output || DEFAULT_OUTPUT;
+    console.log(chalk.green('▶'), '크롤링 시작:', chalk.cyan(url));
+    console.log(`  최대 깊이: ${opts.maxDepth} | 최대 페이지: ${opts.maxPages}`);
+
+    // 인증 옵션 구성
+    const auth: any = {};
+    if (opts.authCookie) auth.cookie = opts.authCookie;
+    if (opts.authBearer) auth.bearer = opts.authBearer;
+    if (opts.loginUrl) {
+      auth.loginUrl = opts.loginUrl;
+      auth.credentials = {};
+      if (opts.loginId) auth.credentials.email = opts.loginId;
+      if (opts.loginPw) auth.credentials.password = opts.loginPw;
+    }
+
+    const result = await crawl({
+      url,
+      maxDepth: parseInt(opts.maxDepth),
+      maxPages: parseInt(opts.maxPages),
+      screenshot: opts.screenshot !== false,
+      headless: opts.headless !== false,
+      outputDir,
+      waitTime: parseInt(opts.wait),
+      auth: Object.keys(auth).length > 0 ? auth : undefined,
+    });
+
+    console.log(chalk.green('✓'), `크롤링 완료!`);
+    console.log(`  페이지: ${result.pages.length}개`);
+    console.log(`  API 호출: ${result.pages.reduce((n, p) => n + p.apiCalls.length, 0)}개`);
+
+    await mkdir(outputDir, { recursive: true });
+    const crawlPath = join(outputDir, 'crawl-result.json');
+    await writeFile(crawlPath, JSON.stringify(result, null, 2));
+    console.log(`  → ${chalk.cyan(crawlPath)}`);
+  });
+
 // ─── full ───
 
 program
   .command('full')
   .argument('[path]', '소스코드 경로 (생략하면 현재 디렉토리)')
+  .option('--url <url>', '실행 중인 서비스 URL (크롤링 추가)')
   .option('--framework <name>', '프레임워크', 'auto')
+  .option('--no-headless', '크롤링 시 브라우저 표시')
+  .option('--auth-cookie <cookie>', '크롤링 인증 쿠키')
   .option('-o, --output <dir>', '출력 디렉토리 (기본: <프로젝트>/.reverse-engine)')
-  .description('전체 파이프라인 (analyze → report → test)')
+  .description('전체 파이프라인 (crawl → analyze → report → test)')
   .action(async (path: string | undefined, opts: any) => {
     const sourcePath = path ? resolve(path) : detectProjectRoot();
     const outputDir = resolveOutput(opts.output, sourcePath);
 
     console.log(chalk.green('\n◆'), 'ReversEngine',
       nativeBin ? chalk.dim('⚡') : '', '\n');
+    if (opts.url) console.log(`  URL:  ${chalk.cyan(opts.url)}`);
     console.log(`  소스: ${chalk.cyan(sourcePath)}`);
     console.log(`  출력: ${chalk.cyan(outputDir)}\n`);
 
     await mkdir(outputDir, { recursive: true });
     const analysisPath = join(outputDir, 'analysis.json');
 
-    // Step 1: 분석
+    // Step 0: 크롤링 (URL이 있는 경우)
+    if (opts.url) {
+      console.log(chalk.gray('━'.repeat(50)));
+      console.log(chalk.green('▶'), '크롤링:', chalk.cyan(opts.url));
+      const crawlResult = await crawl({
+        url: opts.url,
+        outputDir,
+        headless: opts.headless !== false,
+        auth: opts.authCookie ? { cookie: opts.authCookie } : undefined,
+      });
+      console.log(chalk.green('✓'), `크롤링: 페이지 ${crawlResult.pages.length} | API ${crawlResult.pages.reduce((n, p) => n + p.apiCalls.length, 0)}`);
+      await writeFile(join(outputDir, 'crawl-result.json'), JSON.stringify(crawlResult, null, 2));
+    }
+
+    // Step 1: 코드 분석
     console.log(chalk.gray('━'.repeat(50)));
     if (nativeBin) {
       runNative(['analyze', sourcePath, '--framework', opts.framework || 'auto']);
