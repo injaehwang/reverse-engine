@@ -432,8 +432,7 @@ async function probeClickables(
     document.querySelectorAll(
       'button, [role="button"], [data-toggle], [data-bs-toggle], ' +
       '[role="tab"], .tab, .nav-link, .dropdown-toggle, ' +
-      '[aria-haspopup], [aria-expanded], [onclick], [ng-click], ' +
-      '[v-on\\:click], [@click]'
+      '[aria-haspopup], [aria-expanded], [onclick], [ng-click]'
     ).forEach(el => seen.add(el));
 
     // cursor:pointer 요소
