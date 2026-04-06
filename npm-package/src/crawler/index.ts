@@ -44,6 +44,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },
     locale: 'ko-KR',
+    ignoreHTTPSErrors: true,
   });
 
   if (options.auth) {
