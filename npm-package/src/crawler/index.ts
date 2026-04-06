@@ -32,7 +32,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     screenshot = true,
     outputDir = '.reverse-engine',
     headless = true,
-    waitTime = 1500,
+    waitTime = 2000,
     ignorePatterns = ['/logout', '/signout', '/auth/logout'],
     onProgress,
   } = options;
@@ -47,10 +47,10 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     ignoreHTTPSErrors: true,
   });
 
+  // ── 인증 ──
   if (options.auth) {
-    onProgress?.('로그인 중...');
-    await setupAuth(context, url, options.auth);
-    onProgress?.('로그인 완료');
+    onProgress?.('로그인 처리 중...');
+    await handleAuth(context, url, options.auth, onProgress);
   }
 
   const result: CrawlResult = {
@@ -60,9 +60,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   };
 
   const visited = new Set<string>();
-  const queue: { url: string; depth: number; label: string }[] = [
-    { url, depth: 0, label: 'メイン' },
-  ];
+  const queue: { url: string; depth: number }[] = [{ url, depth: 0 }];
   const baseHost = new URL(url).hostname;
   let ssCounter = 0;
 
@@ -78,65 +76,71 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     try {
       onProgress?.(`[${result.pages.length + 1}] ${current.url}`);
 
-      // ── 네트워크 인터셉트 시작 ──
+      // ── 네트워크 인터셉트 ──
       const apiCalls: PageInfo['apiCalls'] = [];
-      page.on('response', async (response) => {
-        const req = response.request();
-        const rt = req.resourceType();
-        if ((rt === 'xhr' || rt === 'fetch') && !isStaticResource(req.url())) {
-          apiCalls.push({
-            method: req.method(),
-            url: req.url(),
-            responseStatus: response.status(),
-            triggeredBy: null,
-          });
-        }
+      page.on('response', (response) => {
+        try {
+          const req = response.request();
+          const rt = req.resourceType();
+          if ((rt === 'xhr' || rt === 'fetch') && !isStaticResource(req.url())) {
+            apiCalls.push({
+              method: req.method(),
+              url: req.url(),
+              responseStatus: response.status(),
+              triggeredBy: null,
+            });
+          }
+        } catch { /* ignore */ }
       });
 
-      // ── 페이지 로드 ──
-      await page.goto(current.url, { waitUntil: 'networkidle', timeout: 30000 });
+      // ── 페이지 로드 (SPA 대응: domcontentloaded 후 추가 대기) ──
+      const response = await page.goto(current.url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+
+      // 로그인 리다이렉트 감지: URL이 다른 도메인으로 바뀌었으면 로그인 필요
+      const currentHost = new URL(page.url()).hostname;
+      if (currentHost !== baseHost) {
+        onProgress?.(`  ⚠ 리다이렉트 감지: ${page.url()} (인증 필요?)`);
+        await page.close();
+        continue;
+      }
+
+      // SPA 렌더링 대기
+      await page.waitForLoadState('networkidle').catch(() => {});
       await page.waitForTimeout(waitTime);
 
       const title = await page.title();
+      onProgress?.(`[${result.pages.length + 1}] ${title || current.url}`);
 
       // ── DOM 스캔 ──
       const elements = await scanDOM(page);
 
-      // ── 페이지 전체 스크린샷 ──
+      // ── 스크린샷 ──
       let screenshotPath: string | null = null;
       if (screenshot) {
         ssCounter++;
         const ssName = `${String(ssCounter).padStart(3, '0')}_page_${safePath(current.url)}.png`;
         screenshotPath = join(screenshotDir, ssName);
-        await page.screenshot({ path: screenshotPath, fullPage: true });
+        await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+        if (screenshotPath) onProgress?.(`  📷 ${ssName}`);
       }
 
-      // ── 클릭 가능한 요소 탐색 (버튼, 드롭다운, 탭 등) ──
-      const clickableResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, onProgress);
-      ssCounter = clickableResults.ssCounter;
+      // ── 클릭 탐색 ──
+      const clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, onProgress);
+      ssCounter = clickResults.ssCounter;
 
-      // 클릭으로 발견된 새 URL 큐에 추가
-      for (const discovered of clickableResults.discoveredUrls) {
-        try {
-          const dUrl = new URL(discovered, current.url);
-          if (dUrl.hostname === baseHost && !visited.has(normalizeUrl(dUrl.href))) {
-            queue.push({ url: dUrl.href, depth: current.depth + 1, label: discovered });
-          }
-        } catch { /* invalid */ }
-      }
-
-      // 링크에서 발견된 URL 큐에 추가
+      // 발견된 URL 큐에 추가
       for (const link of elements.links) {
-        try {
-          const linkUrl = new URL(link.href, current.url);
-          if (linkUrl.hostname === baseHost && !visited.has(normalizeUrl(linkUrl.href))) {
-            queue.push({ url: linkUrl.href, depth: current.depth + 1, label: link.text || link.href });
-          }
-        } catch { /* invalid */ }
+        addToQueue(link.href, current.url, current.depth + 1, baseHost, visited, queue);
+      }
+      for (const discovered of clickResults.discoveredUrls) {
+        addToQueue(discovered, current.url, current.depth + 1, baseHost, visited, queue);
       }
 
-      // 버튼 정보에 클릭 결과 merge
-      for (const cr of clickableResults.interactions) {
+      // 클릭으로 발견된 버튼 merge
+      for (const cr of clickResults.interactions) {
         const btn = elements.buttons.find(b => b.selector === cr.selector);
         if (btn) btn.navigatesTo = cr.navigatedTo;
       }
@@ -149,33 +153,25 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
           ...elements,
           buttons: [
             ...elements.buttons,
-            ...clickableResults.interactions
+            ...clickResults.interactions
               .filter(i => i.type === 'modal' || i.type === 'popup')
-              .map(i => ({
-                text: i.label,
-                selector: i.selector,
-                navigatesTo: i.navigatedTo,
-              })),
+              .map(i => ({ text: i.label, selector: i.selector, navigatesTo: i.navigatedTo })),
           ],
         },
         apiCalls,
-        navigatesTo: [
-          ...new Set([
-            ...elements.links.map(l => l.href),
-            ...clickableResults.discoveredUrls,
-          ]),
-        ],
+        navigatesTo: [...new Set([...elements.links.map(l => l.href), ...clickResults.discoveredUrls])],
         authRequired: false,
       };
 
-      // 클릭 결과 스크린샷들을 페이지에 첨부
-      if (clickableResults.screenshots.length > 0) {
-        (pageInfo as any).interactionScreenshots = clickableResults.screenshots;
+      if (clickResults.screenshots.length > 0) {
+        (pageInfo as any).interactionScreenshots = clickResults.screenshots;
       }
 
       result.pages.push(pageInfo);
-    } catch {
-      // 페이지 로드 실패 → 건너뜀
+      onProgress?.(`[${result.pages.length}] ✓ ${title || current.url} (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length})`);
+    } catch (err: any) {
+      // 에러를 삼키지 않고 표시
+      onProgress?.(`  ✗ ${current.url}: ${err.message?.slice(0, 80) || 'unknown error'}`);
     } finally {
       await page.close();
     }
@@ -185,11 +181,146 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   return result;
 }
 
+function addToQueue(href: string, baseUrl: string, depth: number, baseHost: string, visited: Set<string>, queue: { url: string; depth: number }[]) {
+  try {
+    const u = new URL(href, baseUrl);
+    if (u.hostname === baseHost && !visited.has(normalizeUrl(u.href))) {
+      queue.push({ url: u.href, depth });
+    }
+  } catch { /* invalid URL */ }
+}
+
+// ─── 인증 (Keycloak / 일반 폼 / 쿠키 / Bearer) ───
+
+async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOptions, onProgress?: (msg: string) => void) {
+  const host = new URL(baseUrl).hostname;
+
+  if (auth.cookie) {
+    const cookies = auth.cookie.split(';').map(c => {
+      const [name, ...rest] = c.trim().split('=');
+      return { name, value: rest.join('='), domain: host, path: '/' };
+    });
+    await context.addCookies(cookies);
+    onProgress?.('쿠키 인증 설정 완료');
+    return;
+  }
+
+  if (auth.bearer) {
+    await context.setExtraHTTPHeaders({ Authorization: `Bearer ${auth.bearer}` });
+    onProgress?.('Bearer 토큰 설정 완료');
+    return;
+  }
+
+  // 폼 로그인 (Keycloak 리다이렉트 포함)
+  if (auth.credentials) {
+    const page = await context.newPage();
+
+    // 로그인 URL이 있으면 직접 이동, 없으면 메인 URL 접속 (리다이렉트 대기)
+    const loginTarget = auth.loginUrl
+      ? (auth.loginUrl.startsWith('http') ? auth.loginUrl : new URL(auth.loginUrl, baseUrl).href)
+      : baseUrl;
+
+    onProgress?.(`로그인 페이지 이동: ${loginTarget}`);
+    await page.goto(loginTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(2000);
+
+    const loginPageUrl = page.url();
+    onProgress?.(`로그인 페이지: ${loginPageUrl}`);
+
+    // ID/PW 입력 — 다양한 셀렉터 시도
+    const { email, password, username, id, pw, ...rest } = auth.credentials;
+    const idValue = email || username || id || Object.values(auth.credentials)[0];
+    const pwValue = password || pw || Object.values(auth.credentials)[1];
+
+    if (idValue) {
+      const idFilled = await tryFill(page, [
+        'input[name="username"]', 'input[name="email"]', 'input[name="login"]',
+        'input[name="userId"]', 'input[name="id"]',
+        'input[type="email"]', 'input[type="text"]:not([name="password"])',
+        '#username', '#email', '#login', '#userId',
+      ], idValue);
+      onProgress?.(idFilled ? `ID 입력 완료` : `⚠ ID 필드를 찾지 못함`);
+    }
+
+    if (pwValue) {
+      const pwFilled = await tryFill(page, [
+        'input[name="password"]', 'input[name="pw"]',
+        'input[type="password"]',
+        '#password', '#pw',
+      ], pwValue);
+      onProgress?.(pwFilled ? `PW 입력 완료` : `⚠ PW 필드를 찾지 못함`);
+    }
+
+    // 추가 필드 (Keycloak 커스텀 필드 등)
+    for (const [field, value] of Object.entries(rest)) {
+      await tryFill(page, [`[name="${field}"]`, `#${field}`], value);
+    }
+
+    // 제출
+    const submitSelectors = auth.submitSelector
+      ? [auth.submitSelector]
+      : [
+          'button[type="submit"]', 'input[type="submit"]',
+          '#kc-login',  // Keycloak
+          'button:has-text("로그인")', 'button:has-text("Login")',
+          'button:has-text("Sign in")', 'button:has-text("Log in")',
+          'button[name="login"]',
+        ];
+
+    let submitted = false;
+    for (const sel of submitSelectors) {
+      try {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 1000 })) {
+          await btn.click();
+          submitted = true;
+          onProgress?.(`제출 버튼 클릭: ${sel}`);
+          break;
+        }
+      } catch { /* next */ }
+    }
+
+    if (!submitted) {
+      // Enter 키로 제출 시도
+      await page.keyboard.press('Enter');
+      onProgress?.('Enter 키로 제출');
+    }
+
+    // 로그인 완료 대기 — URL이 바뀌거나 페이지가 로드될 때까지
+    await page.waitForURL((url) => url.toString() !== loginPageUrl, { timeout: 15000 }).catch(() => {});
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(2000);
+
+    const afterUrl = page.url();
+    const loginSuccess = afterUrl !== loginPageUrl;
+    onProgress?.(loginSuccess
+      ? `✓ 로그인 성공 → ${afterUrl}`
+      : `⚠ 로그인 후 URL 변화 없음 (${afterUrl})`
+    );
+
+    await page.close();
+  }
+}
+
+async function tryFill(page: Page, selectors: string[], value: string): Promise<boolean> {
+  for (const sel of selectors) {
+    try {
+      const el = page.locator(sel).first();
+      if (await el.isVisible({ timeout: 1000 })) {
+        await el.fill(value);
+        return true;
+      }
+    } catch { /* next */ }
+  }
+  return false;
+}
+
 // ─── DOM 스캔 ───
 
 async function scanDOM(page: Page) {
   return page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a[href]')).map((el, i) => {
+    const links = Array.from(document.querySelectorAll('a[href]')).map((el) => {
       const a = el as HTMLAnchorElement;
       return {
         text: a.textContent?.trim().slice(0, 100) || '',
@@ -200,7 +331,7 @@ async function scanDOM(page: Page) {
 
     const buttons = Array.from(
       document.querySelectorAll('button, [role="button"], input[type="submit"], [onclick], [data-toggle], [data-bs-toggle]')
-    ).map((el, i) => {
+    ).map((el) => {
       const btn = el as HTMLElement;
       return {
         text: btn.textContent?.trim().slice(0, 100) || (btn as HTMLInputElement).value || '',
@@ -213,26 +344,15 @@ async function scanDOM(page: Page) {
       const form = el as HTMLFormElement;
       const fields = Array.from(form.querySelectorAll('input, select, textarea')).map((f) => {
         const field = f as HTMLInputElement;
-        return {
-          name: field.name || field.id || '',
-          fieldType: field.type || field.tagName.toLowerCase(),
-          required: field.required,
-        };
+        return { name: field.name || field.id || '', fieldType: field.type || field.tagName.toLowerCase(), required: field.required };
       });
-      return {
-        id: form.id || null,
-        action: form.action || null,
-        method: form.method?.toUpperCase() || 'GET',
-        fields,
-      };
+      return { id: form.id || null, action: form.action || null, method: form.method?.toUpperCase() || 'GET', fields };
     });
 
     function buildSelector(el: Element): string {
       if (el.id) return `#${el.id}`;
-      // data-testid 우선
       const testId = el.getAttribute('data-testid') || el.getAttribute('data-test');
       if (testId) return `[data-testid="${testId}"]`;
-      // 클래스 기반
       const tag = el.tagName.toLowerCase();
       const cls = Array.from(el.classList).slice(0, 2).join('.');
       if (cls) return `${tag}.${cls}`;
@@ -240,8 +360,7 @@ async function scanDOM(page: Page) {
     }
 
     function getIndex(el: Element): number {
-      let idx = 1;
-      let sib = el.previousElementSibling;
+      let idx = 1; let sib = el.previousElementSibling;
       while (sib) { if (sib.tagName === el.tagName) idx++; sib = sib.previousElementSibling; }
       return idx;
     }
@@ -250,7 +369,7 @@ async function scanDOM(page: Page) {
   });
 }
 
-// ─── 클릭 가능한 요소 실제 클릭하여 탐색 ───
+// ─── 클릭 탐색 ───
 
 interface InteractionResult {
   selector: string;
@@ -261,219 +380,113 @@ interface InteractionResult {
 }
 
 async function probeClickables(
-  page: Page,
-  screenshotDir: string,
-  screenshot: boolean,
-  ssCounter: number,
-  waitTime: number,
-  onProgress?: (msg: string) => void,
-): Promise<{
-  interactions: InteractionResult[];
-  discoveredUrls: string[];
-  screenshots: string[];
-  ssCounter: number;
-}> {
+  page: Page, screenshotDir: string, screenshot: boolean,
+  ssCounter: number, waitTime: number, onProgress?: (msg: string) => void,
+): Promise<{ interactions: InteractionResult[]; discoveredUrls: string[]; screenshots: string[]; ssCounter: number }> {
   const interactions: InteractionResult[] = [];
   const discoveredUrls: string[] = [];
   const screenshots: string[] = [];
-  const currentUrl = page.url();
 
-  // 클릭 대상: 버튼, role=button, data-toggle, 탭 등
   const clickTargets = await page.evaluate(() => {
-    const targets: { selector: string; label: string; visible: boolean }[] = [];
+    const targets: { selector: string; label: string }[] = [];
+    const seen = new Set<Element>();
 
-    // 1) 명시적 클릭 요소
-    const explicit = document.querySelectorAll(
+    // 명시적 클릭 요소
+    document.querySelectorAll(
       'button, [role="button"], [data-toggle], [data-bs-toggle], ' +
       '[role="tab"], .tab, .nav-link, .dropdown-toggle, ' +
       '[aria-haspopup], [aria-expanded], [onclick], [ng-click], ' +
       '[v-on\\:click], [@click]'
-    );
+    ).forEach(el => seen.add(el));
 
-    // 2) cursor:pointer를 가진 모든 요소 (JS 이벤트 리스너가 붙어있을 가능성)
-    const allVisible = document.querySelectorAll('div, span, li, td, tr, img, svg, i, label, p, section, article');
-    const pointerElements: Element[] = [];
-    allVisible.forEach(el => {
+    // cursor:pointer 요소
+    document.querySelectorAll('div, span, li, td, tr, img, svg, i, label, p, section, article').forEach(el => {
+      if (seen.has(el)) return;
       const style = window.getComputedStyle(el);
-      if (style.cursor === 'pointer') {
-        // 이미 button/a/위 셀렉터에 포함된 것은 제외
-        if (el.tagName !== 'BUTTON' && el.tagName !== 'A' &&
-            !el.getAttribute('role') && !el.hasAttribute('data-toggle')) {
-          pointerElements.push(el);
-        }
+      if (style.cursor === 'pointer' && el.tagName !== 'BUTTON' && el.tagName !== 'A') {
+        seen.add(el);
       }
     });
 
-    const elements = new Set([...Array.from(explicit), ...pointerElements]);
-
-    elements.forEach((el) => {
+    seen.forEach(el => {
       const htmlEl = el as HTMLElement;
       const rect = htmlEl.getBoundingClientRect();
-      const visible = rect.width > 0 && rect.height > 0 && rect.top < window.innerHeight;
-      if (!visible) return;
+      if (rect.width <= 0 || rect.height <= 0 || rect.top >= window.innerHeight) return;
 
-      // 셀렉터 구성
       let selector = '';
       if (htmlEl.id) selector = `#${htmlEl.id}`;
       else {
-        const testId = htmlEl.getAttribute('data-testid') || htmlEl.getAttribute('data-test');
-        if (testId) selector = `[data-testid="${testId}"]`;
+        const text = htmlEl.textContent?.trim().slice(0, 30) || '';
+        const tag = htmlEl.tagName.toLowerCase();
+        if (text) selector = `${tag}:has-text("${text.replace(/"/g, "'")}")`;
         else {
-          const tag = htmlEl.tagName.toLowerCase();
-          const text = htmlEl.textContent?.trim().slice(0, 30) || '';
-          if (text) selector = `${tag}:has-text("${text}")`;
-          else selector = `${tag}:nth-of-type(${getIdx(htmlEl)})`;
+          const cls = Array.from(htmlEl.classList).slice(0, 2).join('.');
+          selector = cls ? `${tag}.${cls}` : tag;
         }
       }
 
-      targets.push({
-        selector,
-        label: htmlEl.textContent?.trim().slice(0, 50) || '',
-        visible,
-      });
-
-      function getIdx(e: Element): number {
-        let i = 1; let s = e.previousElementSibling;
-        while (s) { if (s.tagName === e.tagName) i++; s = s.previousElementSibling; }
-        return i;
-      }
+      targets.push({ selector, label: htmlEl.textContent?.trim().slice(0, 50) || '' });
     });
 
-    return targets.slice(0, 30); // 너무 많으면 상위 30개만
+    return targets.slice(0, 30);
   });
 
   for (const target of clickTargets) {
     try {
-      onProgress?.(`  클릭: ${target.label || target.selector}`);
-
       const beforeUrl = page.url();
       const beforeHTML = await page.evaluate(() => document.body.innerHTML.length);
 
-      // 클릭
       await page.click(target.selector, { timeout: 3000 }).catch(() => {});
       await page.waitForTimeout(Math.min(waitTime, 1000));
 
       const afterUrl = page.url();
       const afterHTML = await page.evaluate(() => document.body.innerHTML.length).catch(() => 0);
 
-      // 모달/다이얼로그 감지
-      const hasModal = await page.evaluate(() => {
-        const modal = document.querySelector(
+      const hasModal = await page.evaluate(() =>
+        !!document.querySelector(
           '[role="dialog"], .modal.show, .modal[open], dialog[open], ' +
-          '.popup, .overlay, [class*="modal"][class*="open"], ' +
-          '[class*="dialog"], [aria-modal="true"]'
-        );
-        return modal !== null;
-      }).catch(() => false);
+          '.popup, .overlay, [aria-modal="true"], [class*="modal"][class*="open"]'
+        )
+      ).catch(() => false);
 
-      // 결과 판단
       let type: InteractionResult['type'] = 'none';
       let navigatedTo: string | null = null;
 
       if (afterUrl !== beforeUrl) {
-        // URL이 바뀜 → 네비게이션
-        type = 'navigate';
-        navigatedTo = afterUrl;
+        type = 'navigate'; navigatedTo = afterUrl;
         discoveredUrls.push(afterUrl);
       } else if (hasModal) {
         type = 'modal';
       } else if (Math.abs(afterHTML - beforeHTML) > 200) {
-        // DOM이 크게 변했으면 드롭다운이나 패널
         type = 'dropdown';
       }
 
-      // 모달/드롭다운이 열렸으면 스크린샷 촬영
       if (screenshot && (type === 'modal' || type === 'dropdown')) {
         ssCounter++;
         const ssName = `${String(ssCounter).padStart(3, '0')}_click_${safePath(target.label || target.selector)}.png`;
         const ssPath = join(screenshotDir, ssName);
-        await page.screenshot({ path: ssPath, fullPage: false }); // 뷰포트 영역만
+        await page.screenshot({ path: ssPath, fullPage: false }).catch(() => {});
         screenshots.push(ssPath);
-
-        interactions.push({
-          selector: target.selector,
-          label: target.label,
-          type,
-          navigatedTo,
-          screenshotPath: ssPath,
-        });
+        interactions.push({ selector: target.selector, label: target.label, type, navigatedTo, screenshotPath: ssPath });
+        onProgress?.(`  📷 ${type}: ${target.label || target.selector}`);
       } else {
-        interactions.push({
-          selector: target.selector,
-          label: target.label,
-          type,
-          navigatedTo,
-          screenshotPath: null,
-        });
+        interactions.push({ selector: target.selector, label: target.label, type, navigatedTo, screenshotPath: null });
       }
 
-      // 모달이 열렸으면 닫기 시도 (ESC 또는 닫기 버튼)
+      // 모달 닫기
       if (hasModal) {
         await page.keyboard.press('Escape');
         await page.waitForTimeout(500);
       }
-
-      // URL이 바뀌었으면 뒤로가기
+      // 네비게이션 복귀
       if (afterUrl !== beforeUrl) {
-        await page.goBack({ waitUntil: 'networkidle', timeout: 10000 }).catch(() => {});
+        await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
         await page.waitForTimeout(500);
       }
-    } catch {
-      // 클릭 실패는 무시
-    }
+    } catch { /* skip */ }
   }
 
   return { interactions, discoveredUrls, screenshots, ssCounter };
-}
-
-// ─── 인증 ───
-
-async function setupAuth(context: BrowserContext, baseUrl: string, auth: AuthOptions) {
-  const host = new URL(baseUrl).hostname;
-
-  if (auth.cookie) {
-    const cookies = auth.cookie.split(';').map(c => {
-      const [name, ...rest] = c.trim().split('=');
-      return { name, value: rest.join('='), domain: host, path: '/' };
-    });
-    await context.addCookies(cookies);
-  }
-
-  if (auth.bearer) {
-    await context.setExtraHTTPHeaders({ Authorization: `Bearer ${auth.bearer}` });
-  }
-
-  if (auth.loginUrl && auth.credentials) {
-    const page = await context.newPage();
-    await page.goto(auth.loginUrl, { waitUntil: 'networkidle', timeout: 30000 });
-
-    for (const [field, value] of Object.entries(auth.credentials)) {
-      // 다양한 셀렉터 시도
-      const selectors = [
-        `[name="${field}"]`,
-        `#${field}`,
-        `input[type="${field}"]`,
-        `input[placeholder*="${field}" i]`,
-        `input[aria-label*="${field}" i]`,
-      ];
-      for (const sel of selectors) {
-        try {
-          const el = page.locator(sel).first();
-          if (await el.isVisible({ timeout: 1000 })) {
-            await el.fill(value);
-            break;
-          }
-        } catch { /* next selector */ }
-      }
-    }
-
-    const submitSelector = auth.submitSelector
-      || 'button[type="submit"], button:has-text("로그인"), button:has-text("Login"), button:has-text("Sign in"), input[type="submit"]';
-    await page.click(submitSelector).catch(() => {});
-    await page.waitForLoadState('networkidle').catch(() => {});
-    await page.waitForTimeout(2000);
-    await page.close();
-  }
 }
 
 // ─── 유틸 ───
@@ -481,15 +494,12 @@ async function setupAuth(context: BrowserContext, baseUrl: string, auth: AuthOpt
 function normalizeUrl(url: string): string {
   try {
     const u = new URL(url);
-    u.hash = '';
-    u.search = '';
+    u.hash = ''; u.search = '';
     let path = u.pathname;
     if (path.endsWith('/') && path.length > 1) path = path.slice(0, -1);
     u.pathname = path;
     return u.href;
-  } catch {
-    return url;
-  }
+  } catch { return url; }
 }
 
 function isStaticResource(url: string): boolean {
