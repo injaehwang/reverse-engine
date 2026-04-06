@@ -177,6 +177,19 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       log(`[${pageNum}] ⚠ 클릭 탐색 실패: ${clickErr.message}`);
     }
 
+    // ── Step 5.5: 폼 자동 작성 + 제출 + 멀티 스텝 추적 ──
+    let formScreenshots: string[] = [];
+    try {
+      const formResults = await probeForms(page, screenshotDir, screenshot, ssCounter, waitTime, log, baseHost, visited, queue, current.depth);
+      ssCounter = formResults.ssCounter;
+      formScreenshots = formResults.screenshots;
+      for (const discovered of formResults.discoveredUrls) {
+        addToQueue(discovered, current.url, current.depth + 1, baseHost, visited, queue);
+      }
+    } catch (formErr: any) {
+      log(`[${pageNum}] ⚠ 폼 탐색 실패: ${formErr.message}`);
+    }
+
     // ── Step 6: 결과 저장 (무조건) ──
     // 큐에 새 URL 추가
     for (const link of elements.links) {
@@ -184,6 +197,17 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     }
     for (const discovered of clickDiscovered) {
       addToQueue(discovered, current.url, current.depth + 1, baseHost, visited, queue);
+    }
+
+    // 화면 흐름 기록
+    const flows: { from: string; trigger: string; to: string }[] = [];
+    for (const link of elements.links) {
+      if (link.href && link.href !== current.url) {
+        flows.push({ from: current.url, trigger: link.text || link.selector, to: link.href });
+      }
+    }
+    for (const disc of clickDiscovered) {
+      flows.push({ from: current.url, trigger: '(클릭)', to: disc });
     }
 
     const pageInfo: PageInfo = {
@@ -195,9 +219,11 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       navigatesTo: [...new Set([...elements.links.map(l => l.href), ...clickDiscovered])],
       authRequired: false,
     };
+    (pageInfo as any).flows = flows;
+    (pageInfo as any).formScreenshots = formScreenshots;
 
     result.pages.push(pageInfo);
-    log(`[${pageNum}] ✓ 저장 완료 (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length}, 큐 ${queue.length})`);
+    log(`[${pageNum}] ✓ 저장 완료 (링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, API ${apiCalls.length}, 폼 ${elements.forms.length}, 큐 ${queue.length})`);
 
     await page.close();
 
@@ -673,6 +699,289 @@ async function probeClickables(
   }
 
   return { interactions, discoveredUrls, screenshots, ssCounter };
+}
+
+// ─── 폼 자동 작성 + 제출 + 멀티스텝 추적 ───
+
+async function probeForms(
+  page: Page, screenshotDir: string, screenshot: boolean,
+  ssCounter: number, waitTime: number, log: (msg: string) => void,
+  baseHost: string, visited: Set<string>,
+  queue: { url: string; depth: number }[], currentDepth: number,
+): Promise<{ discoveredUrls: string[]; screenshots: string[]; ssCounter: number }> {
+  const discoveredUrls: string[] = [];
+  const screenshots: string[] = [];
+
+  // 페이지의 모든 폼 정보 수집
+  const formInfos = await page.evaluate(() => {
+    return Array.from(document.querySelectorAll('form')).map((form, fi) => {
+      const fields = Array.from(form.querySelectorAll('input, select, textarea')).map(el => {
+        const input = el as HTMLInputElement;
+        const rect = input.getBoundingClientRect();
+        return {
+          tag: el.tagName.toLowerCase(),
+          type: input.type || '',
+          name: input.name || input.id || '',
+          placeholder: input.placeholder || '',
+          required: input.required,
+          visible: rect.width > 0 && rect.height > 0,
+          options: el.tagName === 'SELECT'
+            ? Array.from((el as HTMLSelectElement).options).map(o => ({ value: o.value, text: o.text }))
+            : [],
+        };
+      }).filter(f => f.visible);
+
+      return { index: fi, fieldCount: fields.length, fields };
+    }).filter(f => f.fieldCount > 0);
+  }).catch(() => []);
+
+  if (formInfos.length === 0) return { discoveredUrls, screenshots, ssCounter };
+
+  log(`  폼 발견: ${formInfos.length}개`);
+
+  for (const formInfo of formInfos) {
+    log(`  폼 #${formInfo.index}: ${formInfo.fieldCount}개 필드`);
+
+    try {
+      // 각 필드 자동 채우기
+      for (const field of formInfo.fields) {
+        try {
+          const selector = field.name
+            ? `form:nth-of-type(${formInfo.index + 1}) [name="${field.name}"], #${field.name}`
+            : `form:nth-of-type(${formInfo.index + 1}) ${field.tag}[type="${field.type}"]`;
+
+          if (field.tag === 'select' && field.options.length > 0) {
+            // select: 첫 번째 비어있지 않은 옵션 선택
+            const option = field.options.find(o => o.value && o.value !== '') || field.options[1];
+            if (option) {
+              await page.selectOption(selector, option.value).catch(() => {});
+              log(`    select "${field.name}": "${option.text}"`);
+            }
+          } else if (field.tag === 'textarea') {
+            await page.fill(selector, '테스트 입력 내용입니다.').catch(() => {});
+          } else if (field.type === 'checkbox' || field.type === 'radio') {
+            await page.check(selector).catch(() => {});
+          } else if (field.type === 'file') {
+            // 파일 업로드는 건너뜀
+          } else if (field.type === 'date') {
+            await page.fill(selector, '2025-01-15').catch(() => {});
+          } else if (field.type === 'number') {
+            await page.fill(selector, '1').catch(() => {});
+          } else if (field.type === 'tel') {
+            await page.fill(selector, '010-1234-5678').catch(() => {});
+          } else if (field.type === 'email') {
+            await page.fill(selector, 'test@example.com').catch(() => {});
+          } else if (field.type !== 'hidden' && field.type !== 'submit') {
+            const dummy = generateDummyData(field.name, field.placeholder);
+            await page.fill(selector, dummy).catch(() => {});
+            log(`    input "${field.name}": "${dummy}"`);
+          }
+        } catch { /* skip field */ }
+      }
+
+      // 폼 작성 후 스크린샷
+      if (screenshot) {
+        ssCounter++;
+        const ssName = `${String(ssCounter).padStart(3, '0')}_form_filled.png`;
+        const ssPath = join(screenshotDir, ssName);
+        await page.screenshot({ path: ssPath, fullPage: true }).catch(() => {});
+        screenshots.push(ssPath);
+        log(`  📷 폼 작성 완료: ${ssName}`);
+      }
+
+      // 제출 버튼 클릭
+      const beforeUrl = page.url();
+      const submitClicked = await clickFormSubmit(page, formInfo.index);
+      if (submitClicked) {
+        log(`  폼 제출 클릭`);
+        await page.waitForTimeout(waitTime);
+
+        const afterUrl = page.url();
+
+        // 제출 후 스크린샷
+        if (screenshot) {
+          ssCounter++;
+          const ssName = `${String(ssCounter).padStart(3, '0')}_form_submitted.png`;
+          const ssPath = join(screenshotDir, ssName);
+          await page.screenshot({ path: ssPath, fullPage: true }).catch(() => {});
+          screenshots.push(ssPath);
+          log(`  📷 폼 제출 결과: ${ssName}`);
+        }
+
+        // URL 변화 → 새 페이지 발견
+        if (afterUrl !== beforeUrl) {
+          discoveredUrls.push(afterUrl);
+          log(`  → 이동: ${afterUrl}`);
+
+          // 멀티 스텝 추적: 다음 화면에도 폼이 있으면 계속
+          const nextSteps = await trackMultiStep(page, screenshotDir, screenshot, ssCounter, waitTime, log);
+          ssCounter = nextSteps.ssCounter;
+          screenshots.push(...nextSteps.screenshots);
+          discoveredUrls.push(...nextSteps.discoveredUrls);
+
+          // 원래 페이지로 복귀
+          await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+          await page.waitForTimeout(1000);
+        } else {
+          // 같은 페이지에서 변화 (밸리데이션 에러, 성공 메시지, 다음 단계 등)
+          const hasNewContent = await page.evaluate(() => {
+            return !!document.querySelector(
+              '.success, .error, .alert, .toast, .notification, ' +
+              '[class*="step"], [class*="wizard"], [class*="result"]'
+            );
+          }).catch(() => false);
+
+          if (hasNewContent && screenshot) {
+            ssCounter++;
+            const ssName = `${String(ssCounter).padStart(3, '0')}_form_result.png`;
+            const ssPath = join(screenshotDir, ssName);
+            await page.screenshot({ path: ssPath, fullPage: true }).catch(() => {});
+            screenshots.push(ssPath);
+            log(`  📷 폼 결과: ${ssName}`);
+          }
+        }
+      }
+    } catch (e: any) {
+      log(`  ⚠ 폼 처리 에러: ${e.message}`);
+    }
+  }
+
+  return { discoveredUrls, screenshots, ssCounter };
+}
+
+/** 폼 제출 버튼 클릭 */
+async function clickFormSubmit(page: Page, formIndex: number): Promise<boolean> {
+  const submitSelectors = [
+    `form:nth-of-type(${formIndex + 1}) button[type="submit"]`,
+    `form:nth-of-type(${formIndex + 1}) input[type="submit"]`,
+    `form:nth-of-type(${formIndex + 1}) button:last-of-type`,
+  ];
+
+  for (const sel of submitSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 1000 })) {
+        await btn.click();
+        return true;
+      }
+    } catch { /* next */ }
+  }
+
+  // 폼 내 마지막 버튼 좌표 클릭
+  const btnCoords = await page.evaluate((fi) => {
+    const form = document.querySelectorAll('form')[fi];
+    if (!form) return null;
+    const btns = form.querySelectorAll('button, input[type="submit"], [role="button"]');
+    const last = btns[btns.length - 1] as HTMLElement;
+    if (!last) return null;
+    const rect = last.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  }, formIndex).catch(() => null);
+
+  if (btnCoords) {
+    await page.mouse.click(btnCoords.x, btnCoords.y);
+    return true;
+  }
+
+  return false;
+}
+
+/** 멀티 스텝 폼 추적 (최대 5단계) */
+async function trackMultiStep(
+  page: Page, screenshotDir: string, screenshot: boolean,
+  ssCounter: number, waitTime: number, log: (msg: string) => void,
+  maxSteps: number = 5,
+): Promise<{ discoveredUrls: string[]; screenshots: string[]; ssCounter: number }> {
+  const discoveredUrls: string[] = [];
+  const screenshots: string[] = [];
+
+  for (let step = 0; step < maxSteps; step++) {
+    // 다음 화면에 폼이 있는지 확인
+    const hasForm = await page.evaluate(() =>
+      document.querySelectorAll('form input, form select, form textarea').length > 0
+    ).catch(() => false);
+
+    if (!hasForm) break;
+
+    log(`  멀티스텝 ${step + 2}단계 감지`);
+
+    // 새 폼 자동 채우기 (재귀하지 않고 간단히)
+    await page.evaluate(() => {
+      document.querySelectorAll('form input:not([type="hidden"]):not([type="submit"])').forEach(el => {
+        const input = el as HTMLInputElement;
+        if (input.type === 'checkbox' || input.type === 'radio') {
+          input.checked = true;
+        } else if (input.value === '') {
+          input.value = 'test';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+      document.querySelectorAll('form select').forEach(el => {
+        const select = el as HTMLSelectElement;
+        if (select.options.length > 1) {
+          select.selectedIndex = 1;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      });
+    }).catch(() => {});
+
+    if (screenshot) {
+      ssCounter++;
+      const ssName = `${String(ssCounter).padStart(3, '0')}_step${step + 2}_filled.png`;
+      const ssPath = join(screenshotDir, ssName);
+      await page.screenshot({ path: ssPath, fullPage: true }).catch(() => {});
+      screenshots.push(ssPath);
+    }
+
+    // 제출/다음 버튼 클릭
+    const beforeUrl = page.url();
+    const nextClicked = await page.evaluate(() => {
+      const btns = document.querySelectorAll('button[type="submit"], button:last-of-type, [class*="next"], [class*="continue"]');
+      const btn = btns[btns.length - 1] as HTMLElement;
+      if (btn) { btn.click(); return true; }
+      return false;
+    }).catch(() => false);
+
+    if (!nextClicked) break;
+
+    await page.waitForTimeout(waitTime);
+    const afterUrl = page.url();
+
+    if (screenshot) {
+      ssCounter++;
+      const ssName = `${String(ssCounter).padStart(3, '0')}_step${step + 2}_result.png`;
+      const ssPath = join(screenshotDir, ssName);
+      await page.screenshot({ path: ssPath, fullPage: true }).catch(() => {});
+      screenshots.push(ssPath);
+    }
+
+    if (afterUrl !== beforeUrl) {
+      discoveredUrls.push(afterUrl);
+      log(`  멀티스텝 → ${afterUrl}`);
+    }
+  }
+
+  return { discoveredUrls, screenshots, ssCounter };
+}
+
+/** 필드 이름/placeholder 기반 더미 데이터 생성 */
+function generateDummyData(name: string, placeholder: string): string {
+  const key = (name + ' ' + placeholder).toLowerCase();
+  if (key.includes('email') || key.includes('이메일')) return 'test@example.com';
+  if (key.includes('phone') || key.includes('전화') || key.includes('연락처') || key.includes('tel')) return '010-1234-5678';
+  if (key.includes('name') || key.includes('이름') || key.includes('성명')) return '테스트';
+  if (key.includes('addr') || key.includes('주소')) return '서울시 강남구 테스트로 123';
+  if (key.includes('zip') || key.includes('우편')) return '06123';
+  if (key.includes('date') || key.includes('날짜')) return '2025-01-15';
+  if (key.includes('amount') || key.includes('금액') || key.includes('price')) return '10000';
+  if (key.includes('qty') || key.includes('수량')) return '1';
+  if (key.includes('title') || key.includes('제목')) return '테스트 제목';
+  if (key.includes('content') || key.includes('내용') || key.includes('desc') || key.includes('memo')) return '테스트 내용입니다.';
+  if (key.includes('company') || key.includes('회사')) return '테스트 회사';
+  if (key.includes('url') || key.includes('link')) return 'https://example.com';
+  if (key.includes('search') || key.includes('검색')) return '테스트';
+  return '테스트 데이터';
 }
 
 // ─── 유틸 ───

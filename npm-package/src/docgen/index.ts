@@ -85,24 +85,42 @@ async function generateExcel(data: any, outDir: string): Promise<string> {
     // 화면 흐름
     const sf = wb.addWorksheet('화면 흐름');
     sf.columns = [
-      { header: 'No', width: 6 }, { header: '출발 화면', width: 35 },
-      { header: '트리거', width: 25 }, { header: '도착 화면', width: 35 },
+      { header: 'No', width: 6 }, { header: '출발 화면', width: 40 },
+      { header: '트리거', width: 30 }, { header: '도착 화면', width: 40 },
     ];
     applyHeader(sf);
     let flowNo = 0;
+    const flowSet = new Set<string>(); // 중복 제거
     pages.forEach((p: any) => {
-      (p.elements?.links || []).forEach((link: any) => {
-        if (link.href && link.href !== p.url) {
-          flowNo++;
-          sf.addRow([flowNo, p.url, link.text || link.selector, link.href]);
-        }
+      // flows 데이터 (크롤링에서 수집)
+      (p.flows || []).forEach((flow: any) => {
+        const key = `${flow.from}→${flow.to}`;
+        if (flowSet.has(key)) return;
+        flowSet.add(key);
+        flowNo++;
+        sf.addRow([flowNo, flow.from, flow.trigger, flow.to]);
       });
-      (p.elements?.buttons || []).forEach((btn: any) => {
-        if (btn.navigatesTo) {
-          flowNo++;
-          sf.addRow([flowNo, p.url, btn.text || btn.selector, btn.navigatesTo]);
-        }
-      });
+      // flows가 없으면 링크/버튼에서 추출
+      if (!p.flows || p.flows.length === 0) {
+        (p.elements?.links || []).forEach((link: any) => {
+          if (link.href && link.href !== p.url) {
+            const key = `${p.url}→${link.href}`;
+            if (flowSet.has(key)) return;
+            flowSet.add(key);
+            flowNo++;
+            sf.addRow([flowNo, p.url, link.text || link.selector, link.href]);
+          }
+        });
+        (p.elements?.buttons || []).forEach((btn: any) => {
+          if (btn.navigatesTo) {
+            const key = `${p.url}→${btn.navigatesTo}`;
+            if (flowSet.has(key)) return;
+            flowSet.add(key);
+            flowNo++;
+            sf.addRow([flowNo, p.url, btn.text || btn.selector, btn.navigatesTo]);
+          }
+        });
+      }
     });
   }
 
