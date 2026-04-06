@@ -120,10 +120,13 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       log(`[${pageNum}] 로드 중...`);
       await page.goto(current.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-      // 리다이렉트 감지
+      // 리다이렉트 감지 (완전히 다른 도메인만 skip, 서브도메인은 허용)
       const currentHost = new URL(page.url()).hostname;
-      if (currentHost !== baseHost) {
+      const baseDomain = baseHost.split('.').slice(-2).join('.');
+      const currentDomain = currentHost.split('.').slice(-2).join('.');
+      if (currentDomain !== baseDomain && currentHost !== 'localhost' && !currentHost.match(/^(\d+\.){3}\d+$/)) {
         log(`[${pageNum}] ⚠ 다른 도메인으로 리다이렉트: ${page.url()} → skip`);
+        log(`[${pageNum}]   base=${baseDomain}, current=${currentDomain}`);
         await page.close();
         continue;
       }
@@ -243,20 +246,34 @@ async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOp
   if (auth.credentials) {
     const page = await context.newPage();
 
-    // 로그인 URL이 있으면 직접 이동, 없으면 메인 URL 접속 (리다이렉트 대기)
-    const loginTarget = auth.loginUrl
-      ? (auth.loginUrl.startsWith('http') ? auth.loginUrl : new URL(auth.loginUrl, baseUrl).href)
-      : baseUrl;
-
-    onProgress?.(`로그인 페이지 이동: ${loginTarget}`);
-    await page.goto(loginTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // Step 1: 메인 URL 접속 → 로그인 페이지로 리다이렉트되는지 확인
+    onProgress(`메인 URL 접속: ${baseUrl}`);
+    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(2000);
 
-    const loginPageUrl = page.url();
-    onProgress?.(`로그인 페이지: ${loginPageUrl}`);
+    let currentUrl = page.url();
+    onProgress(`현재 페이지: ${currentUrl}`);
 
-    // ID/PW 입력 — 다양한 셀렉터 시도
+    // 로그인 페이지로 리다이렉트 되었거나, 직접 로그인 URL로 이동
+    const isOnLoginPage = currentUrl !== baseUrl || auth.loginUrl;
+
+    if (auth.loginUrl && currentUrl === baseUrl) {
+      // 리다이렉트 안 됐으면 로그인 URL로 직접 이동
+      const loginTarget = auth.loginUrl.startsWith('http')
+        ? auth.loginUrl
+        : new URL(auth.loginUrl, baseUrl).href;
+      onProgress(`로그인 페이지로 이동: ${loginTarget}`);
+      await page.goto(loginTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(2000);
+      currentUrl = page.url();
+      onProgress(`로그인 페이지: ${currentUrl}`);
+    }
+
+    const loginPageUrl = currentUrl;
+
+    // Step 2: ID/PW 입력
     const { email, password, username, id, pw, ...rest } = auth.credentials;
     const idValue = email || username || id || Object.values(auth.credentials)[0];
     const pwValue = password || pw || Object.values(auth.credentials)[1];
@@ -268,7 +285,7 @@ async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOp
         'input[type="email"]', 'input[type="text"]:not([name="password"])',
         '#username', '#email', '#login', '#userId',
       ], idValue);
-      onProgress?.(idFilled ? `ID 입력 완료` : `⚠ ID 필드를 찾지 못함`);
+      onProgress(idFilled ? `ID 입력 완료` : `⚠ ID 필드를 찾지 못함`);
     }
 
     if (pwValue) {
@@ -277,20 +294,19 @@ async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOp
         'input[type="password"]',
         '#password', '#pw',
       ], pwValue);
-      onProgress?.(pwFilled ? `PW 입력 완료` : `⚠ PW 필드를 찾지 못함`);
+      onProgress(pwFilled ? `PW 입력 완료` : `⚠ PW 필드를 찾지 못함`);
     }
 
-    // 추가 필드 (Keycloak 커스텀 필드 등)
     for (const [field, value] of Object.entries(rest)) {
       await tryFill(page, [`[name="${field}"]`, `#${field}`], value);
     }
 
-    // 제출
+    // Step 3: 제출
     const submitSelectors = auth.submitSelector
       ? [auth.submitSelector]
       : [
           'button[type="submit"]', 'input[type="submit"]',
-          '#kc-login',  // Keycloak
+          '#kc-login',
           'button:has-text("로그인")', 'button:has-text("Login")',
           'button:has-text("Sign in")', 'button:has-text("Log in")',
           'button[name="login"]',
@@ -303,29 +319,58 @@ async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOp
         if (await btn.isVisible({ timeout: 1000 })) {
           await btn.click();
           submitted = true;
-          onProgress?.(`제출 버튼 클릭: ${sel}`);
+          onProgress(`제출 버튼 클릭: ${sel}`);
           break;
         }
       } catch { /* next */ }
     }
 
     if (!submitted) {
-      // Enter 키로 제출 시도
       await page.keyboard.press('Enter');
-      onProgress?.('Enter 키로 제출');
+      onProgress('Enter 키로 제출');
     }
 
-    // 로그인 완료 대기 — URL이 바뀌거나 페이지가 로드될 때까지
-    await page.waitForURL((url) => url.toString() !== loginPageUrl, { timeout: 15000 }).catch(() => {});
+    // Step 4: 로그인 완료 대기 — 원래 서비스로 돌아올 때까지 충분히 기다림
+    onProgress('로그인 처리 대기중...');
+
+    // URL 변화 대기
+    await page.waitForURL((url) => {
+      const u = url.toString();
+      return u !== loginPageUrl;
+    }, { timeout: 30000 }).catch(() => {
+      onProgress('⚠ URL 변화 대기 타임아웃');
+    });
+
+    // 추가 대기: 리다이렉트 체인이 끝날 때까지
     await page.waitForLoadState('networkidle').catch(() => {});
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
 
     const afterUrl = page.url();
-    const loginSuccess = afterUrl !== loginPageUrl;
-    onProgress?.(loginSuccess
-      ? `✓ 로그인 성공 → ${afterUrl}`
-      : `⚠ 로그인 후 URL 변화 없음 (${afterUrl})`
-    );
+    onProgress(`로그인 후 URL: ${afterUrl}`);
+
+    // 쿠키 확인
+    const cookies = await context.cookies();
+    onProgress(`세션 쿠키: ${cookies.length}개 (${cookies.map(c => c.name).join(', ')})`);
+
+    // Step 5: 메인 URL로 이동하여 인증 확인
+    if (afterUrl !== baseUrl) {
+      onProgress(`메인 URL로 이동: ${baseUrl}`);
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(2000);
+
+      const finalUrl = page.url();
+      const finalHost = new URL(finalUrl).hostname;
+      const baseHostName = new URL(baseUrl).hostname;
+
+      if (finalHost === baseHostName) {
+        onProgress(`✓ 로그인 성공! 메인 화면: ${finalUrl}`);
+      } else {
+        onProgress(`⚠ 로그인 후에도 리다이렉트됨: ${finalUrl}`);
+      }
+    } else {
+      onProgress(`✓ 로그인 성공! 현재: ${afterUrl}`);
+    }
 
     await page.close();
   }
