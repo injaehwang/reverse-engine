@@ -66,7 +66,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   // ── 인증 ──
   if (options.auth) {
     log('로그인 처리 중...');
-    await handleAuth(context, url, options.auth, log);
+    await handleAuth(context, url, options.auth, log, outputDir);
   }
 
   const result: CrawlResult = {
@@ -223,7 +223,7 @@ function addToQueue(href: string, baseUrl: string, depth: number, baseHost: stri
 
 // ─── 인증 (Keycloak / 일반 폼 / 쿠키 / Bearer) ───
 
-async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOptions, onProgress: (msg: string) => void) {
+async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOptions, onProgress: (msg: string) => void, outputDir: string) {
   const host = new URL(baseUrl).hostname;
 
   if (auth.cookie) {
@@ -245,70 +245,119 @@ async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOp
   // 폼 로그인 (Keycloak 리다이렉트 포함)
   if (auth.credentials) {
     const page = await context.newPage();
+    const screenshotDir = join(outputDir, 'screenshots');
+    await mkdir(screenshotDir, { recursive: true });
 
-    // Step 1: 메인 URL 접속 → 로그인 페이지로 리다이렉트되는지 확인
+    // Step 1: 메인 URL 접속 → Keycloak 등으로 리다이렉트 대기
     onProgress(`메인 URL 접속: ${baseUrl}`);
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+    // 리다이렉트 체인 완료 대기
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(1000);
+      const state = await page.evaluate(() => document.readyState).catch(() => '');
+      if (state === 'complete') break;
+    }
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(2000);
 
     let currentUrl = page.url();
-    onProgress(`현재 페이지: ${currentUrl}`);
+    onProgress(`리다이렉트 결과: ${currentUrl}`);
 
-    // 로그인 페이지로 리다이렉트 되었거나, 직접 로그인 URL로 이동
-    const isOnLoginPage = currentUrl !== baseUrl || auth.loginUrl;
-
-    if (auth.loginUrl && currentUrl === baseUrl) {
-      // 리다이렉트 안 됐으면 로그인 URL로 직접 이동
+    // 로그인 URL이 별도로 지정된 경우
+    if (auth.loginUrl) {
       const loginTarget = auth.loginUrl.startsWith('http')
         ? auth.loginUrl
         : new URL(auth.loginUrl, baseUrl).href;
-      onProgress(`로그인 페이지로 이동: ${loginTarget}`);
-      await page.goto(loginTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForLoadState('networkidle').catch(() => {});
-      await page.waitForTimeout(2000);
-      currentUrl = page.url();
-      onProgress(`로그인 페이지: ${currentUrl}`);
+
+      // 아직 로그인 페이지가 아니면 직접 이동
+      if (!currentUrl.includes(loginTarget.replace(/https?:\/\/[^/]+/, ''))) {
+        onProgress(`로그인 페이지로 이동: ${loginTarget}`);
+        await page.goto(loginTarget, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForLoadState('networkidle').catch(() => {});
+        await page.waitForTimeout(2000);
+        currentUrl = page.url();
+        onProgress(`현재 URL: ${currentUrl}`);
+      }
     }
+
+    // 로그인 페이지 스크린샷
+    await page.screenshot({
+      path: join(screenshotDir, '000_login_page.png'),
+      fullPage: true,
+    }).catch(() => {});
+    onProgress(`📷 로그인 페이지 스크린샷 저장`);
 
     const loginPageUrl = currentUrl;
 
-    // Step 2: ID/PW 입력
+    // Step 2: 로그인 폼 필드 대기 (최대 10초)
+    onProgress('로그인 폼 대기 중...');
+    const hasPasswordField = await page.locator('input[type="password"]')
+      .waitFor({ state: 'visible', timeout: 10000 })
+      .then(() => true)
+      .catch(() => false);
+
+    if (!hasPasswordField) {
+      onProgress('⚠ 비밀번호 필드를 찾지 못함');
+      // 현재 페이지의 모든 input 목록 출력
+      const inputs = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('input')).map(el => ({
+          name: el.name, id: el.id, type: el.type, placeholder: el.placeholder,
+          visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+        }))
+      ).catch(() => []);
+      onProgress(`  페이지 input 필드: ${JSON.stringify(inputs)}`);
+    }
+
+    // Step 3: ID/PW 입력
     const { email, password, username, id, pw, ...rest } = auth.credentials;
     const idValue = email || username || id || Object.values(auth.credentials)[0];
     const pwValue = password || pw || Object.values(auth.credentials)[1];
 
     if (idValue) {
       const idFilled = await tryFill(page, [
-        'input[name="username"]', 'input[name="email"]', 'input[name="login"]',
-        'input[name="userId"]', 'input[name="id"]',
-        'input[type="email"]', 'input[type="text"]:not([name="password"])',
-        '#username', '#email', '#login', '#userId',
+        '#username',  // Keycloak 기본
+        '#email',
+        '#login',
+        'input[name="username"]',
+        'input[name="email"]',
+        'input[name="login"]',
+        'input[name="userId"]',
+        'input[name="id"]',
+        'input[type="email"]',
+        'input[type="text"]',  // 마지막 수단: 첫 번째 text input
       ], idValue);
-      onProgress(idFilled ? `ID 입력 완료` : `⚠ ID 필드를 찾지 못함`);
+      onProgress(idFilled ? `✓ ID 입력 완료: ${idValue}` : `⚠ ID 필드를 찾지 못함`);
     }
 
     if (pwValue) {
       const pwFilled = await tryFill(page, [
-        'input[name="password"]', 'input[name="pw"]',
+        '#password',  // Keycloak 기본
+        'input[name="password"]',
+        'input[name="pw"]',
         'input[type="password"]',
-        '#password', '#pw',
       ], pwValue);
-      onProgress(pwFilled ? `PW 입력 완료` : `⚠ PW 필드를 찾지 못함`);
+      onProgress(pwFilled ? `✓ PW 입력 완료` : `⚠ PW 필드를 찾지 못함`);
     }
 
     for (const [field, value] of Object.entries(rest)) {
       await tryFill(page, [`[name="${field}"]`, `#${field}`], value);
     }
 
-    // Step 3: 제출
+    // 입력 후 스크린샷
+    await page.screenshot({
+      path: join(screenshotDir, '000_login_filled.png'),
+      fullPage: true,
+    }).catch(() => {});
+
+    // Step 4: 제출
     const submitSelectors = auth.submitSelector
       ? [auth.submitSelector]
       : [
-          'button[type="submit"]', 'input[type="submit"]',
-          '#kc-login',
-          'button:has-text("로그인")', 'button:has-text("Login")',
-          'button:has-text("Sign in")', 'button:has-text("Log in")',
+          '#kc-login',  // Keycloak
+          '#kc-form-login input[type="submit"]',
+          'button[type="submit"]',
+          'input[type="submit"]',
           'button[name="login"]',
         ];
 
@@ -316,60 +365,80 @@ async function handleAuth(context: BrowserContext, baseUrl: string, auth: AuthOp
     for (const sel of submitSelectors) {
       try {
         const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 1000 })) {
+        if (await btn.isVisible({ timeout: 2000 })) {
+          onProgress(`제출 버튼 발견: ${sel}`);
           await btn.click();
           submitted = true;
-          onProgress(`제출 버튼 클릭: ${sel}`);
+          onProgress(`✓ 제출 클릭: ${sel}`);
           break;
         }
       } catch { /* next */ }
     }
 
     if (!submitted) {
-      await page.keyboard.press('Enter');
-      onProgress('Enter 키로 제출');
+      // password 필드에서 Enter
+      try {
+        await page.locator('input[type="password"]').press('Enter');
+        submitted = true;
+        onProgress('Enter 키로 제출 (password 필드)');
+      } catch {
+        await page.keyboard.press('Enter');
+        onProgress('Enter 키로 제출 (전역)');
+      }
     }
 
-    // Step 4: 로그인 완료 대기 — 원래 서비스로 돌아올 때까지 충분히 기다림
-    onProgress('로그인 처리 대기중...');
+    // Step 5: 로그인 완료 대기
+    onProgress('로그인 처리 대기 (최대 30초)...');
 
-    // URL 변화 대기
-    await page.waitForURL((url) => {
-      const u = url.toString();
-      return u !== loginPageUrl;
-    }, { timeout: 30000 }).catch(() => {
-      onProgress('⚠ URL 변화 대기 타임아웃');
+    await page.waitForURL(
+      (url) => url.toString() !== loginPageUrl,
+      { timeout: 30000 },
+    ).catch(() => {
+      onProgress('⚠ 30초 후에도 URL 변화 없음');
     });
 
-    // 추가 대기: 리다이렉트 체인이 끝날 때까지
+    // 리다이렉트 체인 완료 대기
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(3000);
 
     const afterUrl = page.url();
     onProgress(`로그인 후 URL: ${afterUrl}`);
 
+    // 로그인 후 스크린샷
+    await page.screenshot({
+      path: join(screenshotDir, '000_after_login.png'),
+      fullPage: true,
+    }).catch(() => {});
+
     // 쿠키 확인
     const cookies = await context.cookies();
-    onProgress(`세션 쿠키: ${cookies.length}개 (${cookies.map(c => c.name).join(', ')})`);
+    onProgress(`세션 쿠키: ${cookies.length}개`);
+    for (const c of cookies.slice(0, 10)) {
+      onProgress(`  쿠키: ${c.name}=${c.value.slice(0, 20)}... (${c.domain})`);
+    }
 
-    // Step 5: 메인 URL로 이동하여 인증 확인
-    if (afterUrl !== baseUrl) {
-      onProgress(`메인 URL로 이동: ${baseUrl}`);
+    // Step 6: 메인 URL로 이동하여 인증 확인
+    const baseHostName = new URL(baseUrl).hostname;
+    const afterHost = new URL(afterUrl).hostname;
+
+    if (afterHost !== baseHostName) {
+      onProgress(`메인 URL로 복귀: ${baseUrl}`);
       await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForLoadState('networkidle').catch(() => {});
-      await page.waitForTimeout(2000);
+      await page.waitForTimeout(3000);
+    }
 
-      const finalUrl = page.url();
-      const finalHost = new URL(finalUrl).hostname;
-      const baseHostName = new URL(baseUrl).hostname;
+    const finalUrl = page.url();
+    const finalHost = new URL(finalUrl).hostname;
 
-      if (finalHost === baseHostName) {
-        onProgress(`✓ 로그인 성공! 메인 화면: ${finalUrl}`);
-      } else {
-        onProgress(`⚠ 로그인 후에도 리다이렉트됨: ${finalUrl}`);
-      }
+    if (finalHost === baseHostName || finalHost === 'localhost') {
+      onProgress(`✓ 로그인 성공! → ${finalUrl}`);
+      await page.screenshot({
+        path: join(screenshotDir, '000_main_after_login.png'),
+        fullPage: true,
+      }).catch(() => {});
     } else {
-      onProgress(`✓ 로그인 성공! 현재: ${afterUrl}`);
+      onProgress(`✗ 로그인 실패 — 여전히 다른 도메인: ${finalUrl}`);
     }
 
     await page.close();
