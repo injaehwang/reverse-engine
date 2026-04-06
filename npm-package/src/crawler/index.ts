@@ -131,7 +131,13 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       log(`  제목: ${title || '(없음)'}`);
 
       // ── DOM 스캔 ──
-      const elements = await scanDOM(page);
+      let elements: Awaited<ReturnType<typeof scanDOM>>;
+      try {
+        elements = await scanDOM(page);
+      } catch (domErr: any) {
+        log(`  ⚠ DOM 스캔 에러: ${domErr.message}`);
+        elements = { links: [], buttons: [], forms: [] };
+      }
 
       // ── 스크린샷 ──
       let screenshotPath: string | null = null;
@@ -146,7 +152,13 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       // ── 클릭 탐색 ──
       log(`  DOM: 링크 ${elements.links.length}, 버튼 ${elements.buttons.length}, 폼 ${elements.forms.length}`);
 
-      const clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, log);
+      let clickResults: Awaited<ReturnType<typeof probeClickables>>;
+      try {
+        clickResults = await probeClickables(page, screenshotDir, screenshot, ssCounter, waitTime, log);
+      } catch (clickErr: any) {
+        log(`  ⚠ 클릭 탐색 중 에러 (건너뜀): ${clickErr.message}`);
+        clickResults = { interactions: [], discoveredUrls: [], screenshots: [], ssCounter };
+      }
       ssCounter = clickResults.ssCounter;
 
       // 발견된 URL 큐에 추가
