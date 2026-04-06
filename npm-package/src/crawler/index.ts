@@ -460,100 +460,145 @@ async function probeClickables(
   const discoveredUrls: string[] = [];
   const screenshots: string[] = [];
 
+  // ── 모든 보이는 요소의 좌표와 정보를 수집 ──
+  // React/Vue는 onclick 속성이 없으므로, 화면에 보이는 모든 요소를
+  // 좌표 기반으로 클릭하고 반응을 관찰한다
   const clickTargets = await page.evaluate(() => {
-    const targets: { selector: string; label: string }[] = [];
-    const seen = new Set<Element>();
+    const targets: { x: number; y: number; w: number; h: number; tag: string; text: string; idx: number }[] = [];
+    const skipTags = new Set(['HTML', 'BODY', 'HEAD', 'SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'BR', 'HR']);
 
-    // 명시적 클릭 요소
-    document.querySelectorAll(
-      'button, [role="button"], [data-toggle], [data-bs-toggle], ' +
-      '[role="tab"], .tab, .nav-link, .dropdown-toggle, ' +
-      '[aria-haspopup], [aria-expanded], [onclick], [ng-click]'
-    ).forEach(el => seen.add(el));
+    // TreeWalker로 모든 요소 순회
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+    let idx = 0;
+    let node: Node | null = walker.currentNode;
 
-    // cursor:pointer 요소
-    document.querySelectorAll('div, span, li, td, tr, img, svg, i, label, p, section, article').forEach(el => {
-      if (seen.has(el)) return;
-      const style = window.getComputedStyle(el);
-      if (style.cursor === 'pointer' && el.tagName !== 'BUTTON' && el.tagName !== 'A') {
-        seen.add(el);
-      }
-    });
+    while (node) {
+      const el = node as HTMLElement;
+      if (!skipTags.has(el.tagName)) {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
 
-    seen.forEach(el => {
-      const htmlEl = el as HTMLElement;
-      const rect = htmlEl.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0 || rect.top >= window.innerHeight) return;
+        // 보이는 요소 + 클릭 가능성이 있는 것
+        const isVisible = rect.width > 10 && rect.height > 10 &&
+          rect.top >= 0 && rect.top < window.innerHeight &&
+          style.display !== 'none' && style.visibility !== 'hidden' &&
+          parseFloat(style.opacity) > 0;
 
-      let selector = '';
-      if (htmlEl.id) selector = `#${htmlEl.id}`;
-      else {
-        const text = htmlEl.textContent?.trim().slice(0, 30) || '';
-        const tag = htmlEl.tagName.toLowerCase();
-        if (text) selector = `${tag}:has-text("${text.replace(/"/g, "'")}")`;
-        else {
-          const cls = Array.from(htmlEl.classList).slice(0, 2).join('.');
-          selector = cls ? `${tag}.${cls}` : tag;
+        const isClickable =
+          el.tagName === 'BUTTON' || el.tagName === 'A' ||
+          el.tagName === 'INPUT' || el.tagName === 'SELECT' ||
+          el.getAttribute('role') === 'button' ||
+          el.getAttribute('role') === 'tab' ||
+          el.getAttribute('role') === 'menuitem' ||
+          el.getAttribute('role') === 'link' ||
+          el.getAttribute('tabindex') !== null ||
+          el.hasAttribute('onclick') ||
+          el.hasAttribute('data-toggle') ||
+          el.hasAttribute('data-bs-toggle') ||
+          style.cursor === 'pointer';
+
+        if (isVisible && isClickable) {
+          const cx = rect.left + rect.width / 2;
+          const cy = rect.top + rect.height / 2;
+          const text = el.textContent?.trim().slice(0, 50) || '';
+
+          // 겹치는 요소 제거: 같은 좌표에 여러 요소가 있으면 가장 안쪽 것만
+          const duplicate = targets.find(t =>
+            Math.abs(t.x - cx) < 5 && Math.abs(t.y - cy) < 5
+          );
+          if (!duplicate) {
+            targets.push({
+              x: Math.round(cx),
+              y: Math.round(cy),
+              w: Math.round(rect.width),
+              h: Math.round(rect.height),
+              tag: el.tagName.toLowerCase(),
+              text,
+              idx: idx++,
+            });
+          }
         }
       }
+      node = walker.nextNode();
+    }
 
-      targets.push({ selector, label: htmlEl.textContent?.trim().slice(0, 50) || '' });
-    });
-
-    return targets.slice(0, 30);
+    return targets.slice(0, 50); // 최대 50개
   });
 
-  for (const target of clickTargets) {
+  log(`  클릭 대상: ${clickTargets.length}개 요소`);
+
+  for (let i = 0; i < clickTargets.length; i++) {
+    const target = clickTargets[i];
+    const label = target.text || `${target.tag}(${target.x},${target.y})`;
+
     try {
       const beforeUrl = page.url();
-      const beforeHTML = await page.evaluate(() => document.body.innerHTML.length);
+      const beforeHTML = await page.evaluate(() => document.body.innerHTML.length).catch(() => 0);
 
-      await page.click(target.selector, { timeout: 3000 }).catch(() => {});
-      await page.waitForTimeout(Math.min(waitTime, 1000));
+      // 좌표 기반 클릭 (셀렉터 문법 오류 없음)
+      await page.mouse.click(target.x, target.y);
+      await page.waitForTimeout(800);
 
       const afterUrl = page.url();
       const afterHTML = await page.evaluate(() => document.body.innerHTML.length).catch(() => 0);
 
+      // 모달/다이얼로그 감지
       const hasModal = await page.evaluate(() =>
         !!document.querySelector(
           '[role="dialog"], .modal.show, .modal[open], dialog[open], ' +
-          '.popup, .overlay, [aria-modal="true"], [class*="modal"][class*="open"]'
+          '[aria-modal="true"], [class*="modal"], [class*="dialog"], ' +
+          '[class*="popup"], [class*="overlay"][class*="open"], ' +
+          '[class*="drawer"]'
         )
       ).catch(() => false);
+
+      // 새 요소 출현 감지 (토스트, 드롭다운 등)
+      const domDelta = Math.abs(afterHTML - beforeHTML);
 
       let type: InteractionResult['type'] = 'none';
       let navigatedTo: string | null = null;
 
       if (afterUrl !== beforeUrl) {
-        type = 'navigate'; navigatedTo = afterUrl;
+        type = 'navigate';
+        navigatedTo = afterUrl;
         discoveredUrls.push(afterUrl);
+        log(`  [${i + 1}/${clickTargets.length}] 🔗 ${label} → ${afterUrl}`);
       } else if (hasModal) {
         type = 'modal';
-      } else if (Math.abs(afterHTML - beforeHTML) > 200) {
+        log(`  [${i + 1}/${clickTargets.length}] 📋 모달: ${label}`);
+      } else if (domDelta > 100) {
         type = 'dropdown';
+        log(`  [${i + 1}/${clickTargets.length}] 📂 변화: ${label} (DOM ±${domDelta})`);
       }
 
-      if (screenshot && (type === 'modal' || type === 'dropdown')) {
+      // 반응이 있으면 스크린샷
+      if (screenshot && type !== 'none') {
         ssCounter++;
-        const ssName = `${String(ssCounter).padStart(3, '0')}_click_${safePath(target.label || target.selector)}.png`;
+        const ssName = `${String(ssCounter).padStart(3, '0')}_${type}_${safePath(label)}.png`;
         const ssPath = join(screenshotDir, ssName);
-        await page.screenshot({ path: ssPath, fullPage: false }).catch(() => {});
+        await page.screenshot({ path: ssPath, fullPage: type === 'navigate' }).catch(() => {});
         screenshots.push(ssPath);
-        interactions.push({ selector: target.selector, label: target.label, type, navigatedTo, screenshotPath: ssPath });
-        log(`  📷 ${type}: ${target.label || target.selector}`);
-      } else {
-        interactions.push({ selector: target.selector, label: target.label, type, navigatedTo, screenshotPath: null });
+        interactions.push({ selector: `coords(${target.x},${target.y})`, label, type, navigatedTo, screenshotPath: ssPath });
+      } else if (type !== 'none') {
+        interactions.push({ selector: `coords(${target.x},${target.y})`, label, type, navigatedTo, screenshotPath: null });
       }
 
-      // 모달 닫기
+      // 복원
       if (hasModal) {
         await page.keyboard.press('Escape');
         await page.waitForTimeout(500);
+        // ESC로 안 닫히면 외부 클릭
+        const stillModal = await page.evaluate(() =>
+          !!document.querySelector('[role="dialog"], .modal.show, [aria-modal="true"]')
+        ).catch(() => false);
+        if (stillModal) {
+          await page.mouse.click(10, 10); // 화면 구석 클릭
+          await page.waitForTimeout(500);
+        }
       }
-      // 네비게이션 복귀
       if (afterUrl !== beforeUrl) {
         await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(800);
       }
     } catch { /* skip */ }
   }
