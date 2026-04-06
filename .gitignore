@@ -22,6 +22,9 @@ output/tests/
 .DS_Store
 Thumbs.db
 
+# Docs (로컬 전용)
+docs/
+
 # Env
 .env
 .env.local
