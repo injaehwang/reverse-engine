@@ -79,6 +79,11 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const visited = new Set<string>();
   const clickedItems = new Set<string>(); // 클릭 중복 방지: "url|text|x,y"
 
+  // SPA 대응: 단일 페이지 유지 (세션/상태 보존)
+  const page = await ctx.newPage();
+  const apis: VisualState['apiCalls'] = [];
+  captureNetwork(page, apis);
+
   while (queue.length > 0 && sm.stateCount < maxPages) {
     const task = queue.pop()! // DFS: 깊이 우선 탐색;
     const norm = normalizeUrl(task.url);
@@ -86,9 +91,9 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     if (ignorePatterns.some(p => norm.includes(p))) continue;
     visited.add(norm);
 
-    const page = await ctx.newPage();
-    const apis: VisualState['apiCalls'] = [];
-    captureNetwork(page, apis);
+    // API 호출 이 페이지에서 새로 수집
+    const pageApis: VisualState['apiCalls'] = [];
+    captureNetwork(page, pageApis);
 
     try {
       const n = sm.stateCount + 1;
@@ -96,7 +101,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       await page.goto(task.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
       // 도메인 체크
-      if (!sameDomain(page.url(), baseHost)) { log(`[${n}] ⚠ 다른 도메인 → skip`); await page.close(); continue; }
+      if (!sameDomain(page.url(), baseHost)) { log(`[${n}] ⚠ 다른 도메인 → skip`); continue; }
 
       await waitForVisualStability(page);
       await page.waitForTimeout(waitTime);
@@ -104,7 +109,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       const hash = await computeContentHash(page, shell.contentSelector);
       if (sm.hasState(hash)) {
         if (task.parentId) sm.addTransition({ fromStateId: task.parentId, toStateId: sm.getState(hash)!.id, triggerType: 'link', triggerText: task.url, triggerPosition: null, annotatedScreenshotPath: null });
-        log(`[${n}] 이미 분석한 화면`); await page.close(); continue;
+        log(`[${n}] 이미 분석한 화면`); continue;
       }
 
       const title = await deriveTitle(page, shell.contentSelector);
@@ -125,7 +130,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
         log(`[${n}] 📷 ${name}`);
       }
 
-      const state = sm.addState(hash, { url: task.url, title, contentHash: hash, screenshotPath: ssPath, contentScreenshotPath: csPath, annotatedScreenshots: [], elements, apiCalls: apis });
+      const state = sm.addState(hash, { url: task.url, title, contentHash: hash, screenshotPath: ssPath, contentScreenshotPath: csPath, annotatedScreenshots: [], elements, apiCalls: pageApis });
       if (task.parentId) sm.addTransition({ fromStateId: task.parentId, toStateId: state.id, triggerType: 'link', triggerText: `→ ${title}`, triggerPosition: null, annotatedScreenshotPath: null });
 
       // ── 1단계: 네비게이션 메뉴 클릭 탐색 (SPA 메뉴) ──
@@ -299,9 +304,10 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       }
 
       log(`[${n}] ✓ "${title}" 완료 (대기 ${queue.length}건)`);
-    } catch (e: any) { log('  ✗ ' + (e.message || '').slice(0, 100)); } finally { await page.close(); await flushLog(); }
+    } catch (e: any) { log('  ✗ ' + (e.message || '').slice(0, 100)); } finally { await flushLog(); }
   }
 
+  await page.close().catch(() => {});
   log(`🏁 분석 완료! ${sm.stateCount}개 화면, ${sm.getAllTransitions().length}개 전환`);
   await flushLog(); await browser.close();
 
@@ -525,7 +531,22 @@ function autoFillValue(fieldType: string, fieldName: string): string {
 }
 
 // ─── 유틸 ───
-function normalizeUrl(u: string): string { try { const o = new URL(u); o.hash = ''; o.search = ''; let p = o.pathname; if (p.endsWith('/') && p.length > 1) p = p.slice(0, -1); o.pathname = p; return o.href; } catch { return u; } }
+function normalizeUrl(u: string): string {
+  try {
+    const o = new URL(u);
+    // hash 라우팅(Vue 기본) 보존: /#/dashboard 등
+    const hash = o.hash;
+    o.search = '';
+    let p = o.pathname;
+    if (p.endsWith('/') && p.length > 1) p = p.slice(0, -1);
+    o.pathname = p;
+    // hash가 라우트 경로이면 보존 (/#/ 또는 #/ 패턴)
+    if (hash && (hash.startsWith('#/') || hash.startsWith('#!/'))) {
+      return o.href + hash;
+    }
+    return o.href;
+  } catch { return u; }
+}
 function safePath(s: string): string { return s.replace(/[^a-zA-Z0-9가-힣_-]/g, '_').slice(0, 40); }
 function sameDomain(url: string, baseHost: string): boolean { try { const h = new URL(url).hostname; return h === baseHost || h === 'localhost' || h.split('.').slice(-2).join('.') === baseHost.split('.').slice(-2).join('.'); } catch { return false; } }
 function isStaticResource(u: string): boolean { return /\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf|ico|map)(\?|$)/i.test(u); }
