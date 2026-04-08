@@ -294,24 +294,32 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
 // ─── 네비게이션 영역 클릭 가능 요소 수집 (SPA 메뉴 대응) ───
 async function scanNavClickables(page: Page, contentSelector: string): Promise<{ text: string; x: number; y: number }[]> {
   return page.evaluate((contentSel) => {
+    // 개발 도구 요소 필터 (Vue/React devtools, 브라우저 확장)
+    function isDev(el: Element): boolean {
+      const id = el.id?.toLowerCase() || '';
+      const cls = el.className?.toString().toLowerCase() || '';
+      if (id.includes('devtools') || id.includes('__vue') || id.includes('__react')) return true;
+      if (cls.includes('devtools') || cls.includes('__vue') || cls.includes('__react')) return true;
+      return !!el.closest('[id*="devtools"], [id*="__vue"], [class*="devtools"]');
+    }
+
     const contentEl = document.querySelector(contentSel);
     const items: { text: string; x: number; y: number }[] = [];
     const seen = new Set<string>();
 
-    // nav, aside, header, sidebar 영역 + role="navigation" 내부 요소
     const navAreas = document.querySelectorAll(
       'nav, aside, header, [role="navigation"], [class*="sidebar"], [class*="menu"], [class*="nav"]'
     );
 
     for (const area of Array.from(navAreas)) {
-      // 콘텐츠 영역 내부이면 스킵
       if (contentEl && contentEl.contains(area)) continue;
+      if (isDev(area)) continue;
 
-      // 클릭 가능한 요소 수집: a, li, div, span 중 cursor:pointer이거나 role 있는 것
       const candidates = area.querySelectorAll(
         'a, li, [role="link"], [role="menuitem"], [role="tab"], [role="button"]'
       );
       for (const el of Array.from(candidates)) {
+        if (isDev(el)) continue;
         const htmlEl = el as HTMLElement;
         const rect = htmlEl.getBoundingClientRect();
         if (rect.width < 10 || rect.height < 10) continue;
@@ -321,19 +329,14 @@ async function scanNavClickables(page: Page, contentSelector: string): Promise<{
         if (!text || seen.has(text)) continue;
         seen.add(text);
 
-        items.push({
-          text,
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2),
-        });
+        items.push({ text, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) });
       }
 
-      // cursor:pointer인 div, span, li도 수집 (React/Vue SPA 메뉴)
       const allEls = area.querySelectorAll('div, span, li, label');
       for (const el of Array.from(allEls)) {
+        if (isDev(el)) continue;
         const htmlEl = el as HTMLElement;
         if (window.getComputedStyle(htmlEl).cursor !== 'pointer') continue;
-        // 이미 위에서 잡은 요소의 자식이면 스킵
         if (htmlEl.querySelector('a, [role="link"], [role="menuitem"]')) continue;
 
         const rect = htmlEl.getBoundingClientRect();
@@ -344,11 +347,7 @@ async function scanNavClickables(page: Page, contentSelector: string): Promise<{
         if (!text || seen.has(text)) continue;
         seen.add(text);
 
-        items.push({
-          text,
-          x: Math.round(rect.left + rect.width / 2),
-          y: Math.round(rect.top + rect.height / 2),
-        });
+        items.push({ text, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) });
       }
     }
 
@@ -371,15 +370,23 @@ async function scanAllLinks(page: Page): Promise<{ text: string; href: string }[
 // ─── 콘텐츠 영역 요소 스캔 ───
 async function scanContent(page: Page, contentSelector: string) {
   return page.evaluate((sel) => {
+    function isDev(el: Element): boolean {
+      const id = el.id?.toLowerCase() || '';
+      const cls = el.className?.toString().toLowerCase() || '';
+      if (id.includes('devtools') || id.includes('__vue') || id.includes('__react')) return true;
+      if (cls.includes('devtools') || cls.includes('__vue') || cls.includes('__react')) return true;
+      return !!el.closest('[id*="devtools"], [id*="__vue"], [class*="devtools"]');
+    }
+
     const c = document.querySelector(sel) || document.body;
-    const links = Array.from(c.querySelectorAll('a[href]')).map(a => ({
+    const links = Array.from(c.querySelectorAll('a[href]')).filter(a => !isDev(a)).map(a => ({
       text: (a as HTMLAnchorElement).textContent?.trim().slice(0, 80) || '',
       href: (a as HTMLAnchorElement).href,
       selector: bSel(a),
     }));
     const seen = new Set<Element>();
-    c.querySelectorAll('button, [role="button"], input[type="submit"], [onclick]').forEach(e => seen.add(e));
-    c.querySelectorAll('div, span, li, td, img, svg, label, i').forEach(e => { if (!seen.has(e) && window.getComputedStyle(e).cursor === 'pointer') seen.add(e); });
+    c.querySelectorAll('button, [role="button"], input[type="submit"], [onclick]').forEach(e => { if (!isDev(e)) seen.add(e); });
+    c.querySelectorAll('div, span, li, td, img, svg, label, i').forEach(e => { if (!seen.has(e) && !isDev(e) && window.getComputedStyle(e).cursor === 'pointer') seen.add(e); });
     // 반복 요소 그룹핑
     const grouped = new Map<string, Element[]>();
     seen.forEach(el => { const r = (el as HTMLElement).getBoundingClientRect(); if (r.width < 10 || r.height < 10 || r.top >= window.innerHeight) return; const k = `${el.tagName}_${Math.round(r.width / 10)}_${Math.round(r.height / 10)}`; if (!grouped.has(k)) grouped.set(k, []); grouped.get(k)!.push(el); });
