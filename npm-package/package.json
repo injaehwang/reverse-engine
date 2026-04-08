@@ -1,6 +1,6 @@
 {
   "name": "reverse-engine",
-  "version": "2.3.0",
+  "version": "3.0.0",
   "description": "역분석 기반 테스트 자동화 도구 — 서비스 탐색, 화면/API 분석, E2E 테스트 코드 자동 생성",
   "keywords": [
     "test-automation",
