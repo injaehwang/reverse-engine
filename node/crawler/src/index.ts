@@ -53,4 +53,6 @@ async function main() {
 
 main().catch(console.error);
 
-export { PageScanner, NetworkInterceptor };
+export { PageScanner } from './page-scanner.js';
+export { NetworkInterceptor } from './network-interceptor.js';
+export { StateDetector } from './state-detector.js';

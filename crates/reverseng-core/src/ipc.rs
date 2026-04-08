@@ -1,11 +1,12 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 /// Rust → Node.js 프로세스 통신
 ///
-/// Rust CLI가 Node.js 스크립트를 subprocess로 실행하고
-/// JSON stdin/stdout으로 데이터를 교환한다.
+/// 소량 데이터: stdin/stdout JSON
+/// 대용량 데이터: 임시 파일 경로 교환 (stdout 버퍼 오버플로우 방지)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IpcRequest {
@@ -20,23 +21,47 @@ pub struct IpcResponse {
     pub error: Option<String>,
 }
 
-/// Node.js 스크립트를 실행하고 JSON 결과를 받는다
-pub async fn call_node_script(
+/// 대용량 데이터를 파일 기반으로 교환하는 IPC
+///
+/// 1. 요청 JSON을 임시 파일에 저장
+/// 2. Node.js에 --input-file, --output-file 인자로 전달
+/// 3. Node.js가 결과를 output 파일에 저장
+/// 4. Rust가 output 파일을 읽어서 반환
+pub async fn call_node_script_file_ipc(
     script_path: &str,
     request: &IpcRequest,
 ) -> Result<IpcResponse> {
-    let _input = serde_json::to_string(request)?;
+    let tmp_dir = std::env::temp_dir().join("reverseng-ipc");
+    std::fs::create_dir_all(&tmp_dir)?;
+
+    let id = std::process::id();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
+
+    let input_file = tmp_dir.join(format!("req-{}-{}.json", id, ts));
+    let output_file = tmp_dir.join(format!("resp-{}-{}.json", id, ts));
+
+    // 요청을 파일에 쓰기
+    std::fs::write(&input_file, serde_json::to_string(request)?)?;
 
     let output = tokio::process::Command::new("node")
         .arg(script_path)
-        .stdin(Stdio::piped())
+        .arg("--input-file")
+        .arg(&input_file)
+        .arg("--output-file")
+        .arg(&output_file)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?
         .wait_with_output()
         .await?;
 
+    // 임시 입력 파일 정리
+    let _ = std::fs::remove_file(&input_file);
+
     if !output.status.success() {
+        let _ = std::fs::remove_file(&output_file);
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Ok(IpcResponse {
             success: false,
@@ -45,42 +70,45 @@ pub async fn call_node_script(
         });
     }
 
-    let stdout = String::from_utf8(output.stdout)?;
-
-    // stdout에서 마지막 JSON 라인을 파싱 (Node.js 로그와 분리)
-    let response: IpcResponse = if let Some(json_line) = stdout.lines().rev().find(|l| l.starts_with('{')) {
-        serde_json::from_str(json_line)?
+    // 결과 파일 읽기
+    let response = if output_file.exists() {
+        let content = std::fs::read_to_string(&output_file)?;
+        let _ = std::fs::remove_file(&output_file);
+        serde_json::from_str(&content)?
     } else {
-        IpcResponse {
-            success: true,
-            data: Some(serde_json::Value::String(stdout)),
-            error: None,
+        // fallback: stdout에서 읽기
+        let stdout = String::from_utf8(output.stdout)?;
+        if let Some(json_line) = stdout.lines().rev().find(|l| l.starts_with('{')) {
+            serde_json::from_str(json_line)?
+        } else {
+            IpcResponse {
+                success: true,
+                data: Some(serde_json::Value::String(stdout)),
+                error: None,
+            }
         }
     };
 
     Ok(response)
 }
 
-/// Node.js 프로세스를 stdin을 통해 스트리밍으로 통신
-pub async fn spawn_node_with_stdin(
-    script_path: &str,
-    input_json: &str,
-) -> Result<String> {
-    use tokio::io::AsyncWriteExt;
+/// 분석 결과를 파일에 저장하고 경로를 반환
+pub fn write_result_file(data: &impl Serialize, prefix: &str) -> Result<PathBuf> {
+    let tmp_dir = std::env::temp_dir().join("reverseng-ipc");
+    std::fs::create_dir_all(&tmp_dir)?;
 
-    let mut child = tokio::process::Command::new("node")
-        .arg(script_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let id = std::process::id();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis();
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(input_json.as_bytes()).await?;
-        stdin.shutdown().await?;
-    }
+    let path = tmp_dir.join(format!("{}-{}-{}.json", prefix, id, ts));
+    std::fs::write(&path, serde_json::to_string(data)?)?;
+    Ok(path)
+}
 
-    let output = child.wait_with_output().await?;
-    let stdout = String::from_utf8(output.stdout)?;
-    Ok(stdout)
+/// 파일에서 결과를 읽어서 반환
+pub fn read_result_file<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&content)?)
 }

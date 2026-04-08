@@ -34,6 +34,11 @@ async function main() {
     results.push(path);
   }
 
+  if (formats.includes('markdown')) {
+    const path = await generateMarkdownReport(data, outputDir);
+    results.push(path);
+  }
+
   // 결과를 JSON으로 stdout 출력
   const response = JSON.stringify({ success: true, data: { outputs: results } });
   process.stdout.write(response);
@@ -168,6 +173,69 @@ async function generateMermaid(data: any, outDir: string): Promise<string> {
 
   const filePath = `${outDir}/component-graph.mmd`;
   await writeFile(filePath, mm, 'utf-8');
+  return filePath;
+}
+
+async function generateMarkdownReport(data: any, outDir: string): Promise<string> {
+  const lines: string[] = [];
+
+  lines.push(`# ReversEngine 분석 보고서\n`);
+  lines.push(`| 항목 | 값 |`);
+  lines.push(`|------|-----|`);
+  lines.push(`| 프로젝트 경로 | \`${data.source_path || '-'}\` |`);
+  lines.push(`| 프레임워크 | ${data.framework || 'Unknown'} |`);
+  lines.push(`| 컴포넌트 | ${data.components?.length || 0}개 |`);
+  lines.push(`| 라우트 | ${data.routes?.length || 0}개 |`);
+  lines.push(`| 함수 | ${data.functions?.length || 0}개 |`);
+  lines.push(`| API 클라이언트 | ${data.api_clients?.length || 0}개 |`);
+  lines.push(`| 의존성 | ${data.dependencies?.length || 0}개 |\n`);
+
+  // 컴포넌트
+  if (data.components?.length) {
+    lines.push(`## 컴포넌트 목록\n`);
+    lines.push(`| No | 컴포넌트명 | 파일경로 | 타입 | Children | Hooks | API 호출 |`);
+    lines.push(`|----|-----------|----------|------|----------|-------|---------|`);
+    data.components.forEach((c: any, i: number) => {
+      lines.push(`| ${i + 1} | **${c.name}** | \`${c.file_path}\` | ${c.component_type} | ${(c.children || []).join(', ') || '-'} | ${(c.hooks || []).join(', ') || '-'} | ${(c.api_calls || []).join(', ') || '-'} |`);
+    });
+    lines.push('');
+  }
+
+  // API
+  if (data.api_clients?.length) {
+    lines.push(`## API 클라이언트 호출\n`);
+    lines.push(`| No | Method | URL 패턴 | 파일 | 함수 |`);
+    lines.push(`|----|--------|----------|------|------|`);
+    data.api_clients.forEach((a: any, i: number) => {
+      lines.push(`| ${i + 1} | \`${a.method}\` | \`${a.url_pattern}\` | \`${a.file_path}\` | ${a.function_name} |`);
+    });
+    lines.push('');
+  }
+
+  // 라우트
+  if (data.routes?.length) {
+    lines.push(`## 라우트 매핑\n`);
+    lines.push(`| No | 경로 | 컴포넌트 | 파일 |`);
+    lines.push(`|----|------|---------|------|`);
+    data.routes.forEach((r: any, i: number) => {
+      lines.push(`| ${i + 1} | \`${r.path}\` | ${r.component} | \`${r.file_path}\` |`);
+    });
+    lines.push('');
+  }
+
+  // 의존성
+  if (data.dependencies?.length) {
+    lines.push(`## 의존성 패키지\n`);
+    lines.push(`| 패키지명 | 버전 | 타입 |`);
+    lines.push(`|----------|------|------|`);
+    data.dependencies.forEach((d: any) => {
+      lines.push(`| ${d.name} | ${d.current_version} | ${d.dep_type} |`);
+    });
+    lines.push('');
+  }
+
+  const filePath = `${outDir}/reverseng-report.md`;
+  await writeFile(filePath, lines.join('\n'), 'utf-8');
   return filePath;
 }
 

@@ -4,6 +4,7 @@
 
 import { generateE2ETests } from './generators/e2e.js';
 import { generateApiTests } from './generators/api.js';
+import { generateFlowTests } from './generators/flow.js';
 
 interface IpcRequest {
   command: string;
@@ -47,6 +48,11 @@ async function main() {
         }
         case 'api': {
           const files = await generateApiTests(analysisData, payload.outputDir);
+          generatedFiles.push(...files);
+          break;
+        }
+        case 'flow': {
+          const files = await generateFlowTests(analysisData, payload.outputDir);
           generatedFiles.push(...files);
           break;
         }

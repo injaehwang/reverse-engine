@@ -9,10 +9,12 @@ dist/
 pnpm-lock.yaml
 
 # Output
-output/screenshots/
-output/reports/
-output/tests/
+output/
+.reverse-engine/
 *.db
+
+# Claude Code
+.claude/
 
 # IDE
 .vscode/

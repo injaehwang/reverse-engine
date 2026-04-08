@@ -6,6 +6,7 @@
 
 import { generateExcel } from './excel/workbook.js';
 import { generateMermaid } from './mermaid/flowchart.js';
+import { generateMarkdown } from './markdown/generator.js';
 
 interface IpcRequest {
   command: string;
@@ -52,7 +53,12 @@ async function main() {
           outputs.push(path);
           break;
         }
-        // TODO: html, markdown
+        case 'markdown': {
+          const mdPath = await generateMarkdown(analysisData, 'output/reports');
+          outputs.push(mdPath);
+          break;
+        }
+        // TODO: html
       }
     }
 

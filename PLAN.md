@@ -617,36 +617,65 @@ export default defineConfig({
 
 ---
 
+## 현재 상태 (v1.0.0 기준)
+
+Phase 1~3 까지 구현 완료. 6개 모듈 중 Upgrader를 제외한 5개가 동작.
+- Crawler: Playwright BFS 크롤링, OAuth2 인증, 스크린샷, HAR 캡처
+- Analyzer: tree-sitter 기반 정적 분석 (React/Vue/Angular/Next/Nuxt/Python)
+- Mapper: SQLite 관계 그래프, 크롤링↔코드 교차 검증
+- DocGen: Excel 6시트, Mermaid 다이어그램
+- TestGen: E2E/API 테스트 자동 생성
+- CLI: crawl, analyze, report, test, full 명령어
+
+7,000개 파일 프로젝트에서 Rust Analyzer 10초 이내 분석 확인.
+
+---
+
 ## 구현 로드맵
 
-### Phase 1: 핵심 기반 (MVP)
-- [ ] 프로젝트 초기 설정 (monorepo, TypeScript, ESLint)
-- [ ] `core` 패키지: 공통 타입 정의
-- [ ] `crawler` 패키지: 기본 URL 탐색 + 스크린샷
-- [ ] `docgen` 패키지: 기본 Excel 출력 (화면 목록, URL-API 매핑)
-- [ ] `cli` 앱: crawl, report 명령어
+> **원칙**: 각 Phase의 완료 조건에 해당 기능의 테스트를 포함한다. 테스트 없이 완료로 간주하지 않는다.
 
-### Phase 2: 코드 분석
-- [ ] `analyzer` 패키지: React/Vue/TS 정적 분석
-- [ ] `mapper` 패키지: SQLite 기반 관계 매핑
-- [ ] `docgen` 확장: 컴포넌트/함수 시트 추가
-- [ ] `cli` 확장: analyze 명령어
+### Phase 1: 안정화 (즉시)
+> 이미 있는 것을 믿을 수 있게 만든다
 
-### Phase 3: 테스트 자동화
-- [ ] `testgen` 패키지: E2E/API 테스트 생성
-- [ ] 비주얼 리그레션 테스트 지원
-- [ ] `cli` 확장: test 명령어
+- [ ] Analyzer 골든 테스트: `sample-react` 분석 결과 스냅샷 (`cargo test`)
+- [ ] Crawler 골든 테스트: 로컬 fixture 서버 크롤링 결과 스냅샷
+- [ ] IPC 안정성: 대용량(7K 파일급) stdout 버퍼 오버플로우 검증
+- [ ] 대용량 IPC를 파일 기반 교환으로 전환 (JSON stdout → 임시 파일 경로 전달)
+- [ ] 증분 분석 기반 구축: 파일 해시 캐싱 + 변경 파일만 재분석 (git diff 연동)
 
-### Phase 4: 유지보수 도구
-- [ ] `upgrader` 패키지: 의존성 감사, 버전 비교
-- [ ] Dead code 탐지
+### Phase 2: 크롤러 강화
+> 실제 서비스에서 정확한 결과를 내게 한다
+
+- [ ] BFS 큐 우선순위: 읽기 액션(GET, 네비게이션) 우선 → 쓰기 액션(POST, DELETE, 폼 제출) 후순위
+- [ ] OAuth2 범용화: provider-agnostic redirect 처리 (Keycloak 외 Google, Azure AD, Auth0 등)
+- [ ] SPA 상태 탐색 최적화: 중복 상태 감지, 탐색 효율 개선
+- [ ] 각 기능에 대한 테스트 포함
+
+### Phase 3: 분석기 심화
+> 데이터 흐름까지 추적한다
+
+- [ ] 상태 관리 분석: Redux, Zustand, Pinia, Recoil 패턴 탐지
+- [ ] 동적 API URL 부분 추적: 템플릿 리터럴, 변수 기반 URL 패턴
+- [ ] Next.js App Router / Remix loader 지원
+- [ ] 서버사이드: HAR 기반 엔드포인트 ↔ 코드 분석 교차 매칭
+- [ ] 커버리지 경고: "이 보고서는 전체 API의 일부일 수 있습니다"
+- [ ] 각 기능에 대한 골든 테스트 fixture 포함
+
+### Phase 4: 문서/테스트 생성 고도화
+> 생성물의 실질적 가치를 높인다
+
+- [ ] Markdown 보고서 완성 (Excel과 동일 정보)
+- [ ] 대규모 그래프 시각화: 100+ 노드 대응 (D3.js 또는 Graphviz). 벤치마크: Madge
+- [ ] 테스트 생성 강화: 폼 입력 시나리오, 에러 응답 검증, 인증 흐름
+- [ ] 벤치마크 반영: dependency-cruiser(규칙 시스템), Postman(API 시각화)
+- [ ] 각 기능에 대한 테스트 포함
+
+### Phase 5: Upgrader + 유지보수
+- [ ] 의존성 취약점 검사 (npm audit 통합)
+- [ ] Dead code 탐지 (분석 그래프에서 미참조 노드)
 - [ ] 변경 영향도 분석
-- [ ] `cli` 확장: upgrade 명령어
-
-### Phase 5: 웹 대시보드
-- [ ] 분석 결과 웹 시각화
-- [ ] 인터랙티브 화면 흐름도
-- [ ] 실시간 크롤링 진행상황 모니터링
+- [ ] 각 기능에 대한 테스트 포함
 
 ---
 

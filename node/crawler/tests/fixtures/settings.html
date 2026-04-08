@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head><title>설정</title></head>
+<body>
+  <h1>설정</h1>
+  <a href="/" id="nav-home">홈</a>
+  <form id="settings-form" method="POST" action="/api/settings">
+    <input type="text" name="username" placeholder="이름" required />
+    <input type="email" name="email" placeholder="이메일" />
+    <button type="submit">저장</button>
+  </form>
+</body>
+</html>

@@ -1,0 +1,615 @@
+{
+  "source_path": "./test-fixtures/sample-react",
+  "framework": "React",
+  "components": [
+    {
+      "name": "App",
+      "file_path": "src\\App.tsx",
+      "line_start": 8,
+      "line_end": 20,
+      "component_type": "Widget",
+      "props": [],
+      "children": [
+        "BrowserRouter",
+        "Dashboard",
+        "Layout",
+        "Login",
+        "Route",
+        "Routes",
+        "Settings"
+      ],
+      "used_by": [],
+      "hooks": [],
+      "api_calls": []
+    },
+    {
+      "name": "ActivityFeed",
+      "file_path": "src\\components\\ActivityFeed.tsx",
+      "line_start": 13,
+      "line_end": 27,
+      "component_type": "Widget",
+      "props": [],
+      "children": [],
+      "used_by": [
+        "Dashboard"
+      ],
+      "hooks": [],
+      "api_calls": []
+    },
+    {
+      "name": "Layout",
+      "file_path": "src\\components\\Layout.tsx",
+      "line_start": 8,
+      "line_end": 19,
+      "component_type": "Layout",
+      "props": [],
+      "children": [
+        "Link"
+      ],
+      "used_by": [
+        "App"
+      ],
+      "hooks": [],
+      "api_calls": []
+    },
+    {
+      "name": "StatsCard",
+      "file_path": "src\\components\\StatsCard.tsx",
+      "line_start": 9,
+      "line_end": 17,
+      "component_type": "Widget",
+      "props": [],
+      "children": [],
+      "used_by": [
+        "Dashboard"
+      ],
+      "hooks": [],
+      "api_calls": []
+    },
+    {
+      "name": "Dashboard",
+      "file_path": "src\\pages\\Dashboard.tsx",
+      "line_start": 10,
+      "line_end": 55,
+      "component_type": "Page",
+      "props": [],
+      "children": [
+        "ActivityFeed",
+        "StatsCard"
+      ],
+      "used_by": [
+        "App"
+      ],
+      "hooks": [
+        "useEffect",
+        "useState"
+      ],
+      "api_calls": [
+        "GET )",
+        "GET /api/export"
+      ]
+    },
+    {
+      "name": "Login",
+      "file_path": "src\\pages\\Login.tsx",
+      "line_start": 5,
+      "line_end": 26,
+      "component_type": "Page",
+      "props": [],
+      "children": [],
+      "used_by": [
+        "App"
+      ],
+      "hooks": [
+        "useNavigate",
+        "useState"
+      ],
+      "api_calls": [
+        "POST /api/auth/login"
+      ]
+    },
+    {
+      "name": "Settings",
+      "file_path": "src\\pages\\Settings.tsx",
+      "line_start": 4,
+      "line_end": 29,
+      "component_type": "Page",
+      "props": [],
+      "children": [],
+      "used_by": [
+        "App"
+      ],
+      "hooks": [
+        "useState"
+      ],
+      "api_calls": [
+        "DELETE /api/settings/account",
+        "PUT /api/settings/profile"
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "path": "/",
+      "component": "<Dashboard />",
+      "file_path": "src\\App.tsx",
+      "guards": [],
+      "children": [],
+      "meta": null
+    },
+    {
+      "path": "/settings",
+      "component": "<Settings />",
+      "file_path": "src\\App.tsx",
+      "guards": [],
+      "children": [],
+      "meta": null
+    },
+    {
+      "path": "/login",
+      "component": "<Login />",
+      "file_path": "src\\App.tsx",
+      "guards": [],
+      "children": [],
+      "meta": null
+    }
+  ],
+  "functions": [
+    {
+      "name": "fetchDashboardStats",
+      "file_path": "src\\api\\dashboard.ts",
+      "line_start": 3,
+      "line_end": 6,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "get"
+      ],
+      "called_by": [
+        "Dashboard",
+        "loadData"
+      ],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "fetchActivities",
+      "file_path": "src\\api\\dashboard.ts",
+      "line_start": 8,
+      "line_end": 11,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "get"
+      ],
+      "called_by": [
+        "Dashboard",
+        "loadData"
+      ],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "createProject",
+      "file_path": "src\\api\\dashboard.ts",
+      "line_start": 13,
+      "line_end": 16,
+      "params": [
+        "name: string"
+      ],
+      "return_type": null,
+      "calls": [
+        "post"
+      ],
+      "called_by": [],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "fetchUserProfile",
+      "file_path": "src\\api\\dashboard.ts",
+      "line_start": 18,
+      "line_end": 21,
+      "params": [
+        "userId: string"
+      ],
+      "return_type": null,
+      "calls": [
+        "get"
+      ],
+      "called_by": [],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "deleteItem",
+      "file_path": "src\\api\\dashboard.ts",
+      "line_start": 23,
+      "line_end": 26,
+      "params": [
+        "category: string",
+        "id: number"
+      ],
+      "return_type": null,
+      "calls": [
+        "delete"
+      ],
+      "called_by": [],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "App",
+      "file_path": "src\\App.tsx",
+      "line_start": 8,
+      "line_end": 20,
+      "params": [],
+      "return_type": null,
+      "calls": [],
+      "called_by": [],
+      "is_async": false,
+      "is_exported": true
+    },
+    {
+      "name": "ActivityFeed",
+      "file_path": "src\\components\\ActivityFeed.tsx",
+      "line_start": 13,
+      "line_end": 27,
+      "params": [
+        "{ items }: ActivityFeedProps"
+      ],
+      "return_type": null,
+      "calls": [
+        "map"
+      ],
+      "called_by": [],
+      "is_async": false,
+      "is_exported": true
+    },
+    {
+      "name": "Layout",
+      "file_path": "src\\components\\Layout.tsx",
+      "line_start": 8,
+      "line_end": 19,
+      "params": [
+        "{ children }: LayoutProps"
+      ],
+      "return_type": null,
+      "calls": [],
+      "called_by": [],
+      "is_async": false,
+      "is_exported": true
+    },
+    {
+      "name": "StatsCard",
+      "file_path": "src\\components\\StatsCard.tsx",
+      "line_start": 9,
+      "line_end": 17,
+      "params": [
+        "{ title, value, icon }: StatsCardProps"
+      ],
+      "return_type": null,
+      "calls": [
+        "toLocaleString"
+      ],
+      "called_by": [],
+      "is_async": false,
+      "is_exported": true
+    },
+    {
+      "name": "Dashboard",
+      "file_path": "src\\pages\\Dashboard.tsx",
+      "line_start": 10,
+      "line_end": 55,
+      "params": [
+        "{ userId }: DashboardProps"
+      ],
+      "return_type": null,
+      "calls": [
+        "blob",
+        "fetch",
+        "fetchActivities",
+        "fetchDashboardStats",
+        "loadData",
+        "log",
+        "setActivities",
+        "setLoading",
+        "setStats",
+        "useEffect",
+        "useState"
+      ],
+      "called_by": [],
+      "is_async": false,
+      "is_exported": true
+    },
+    {
+      "name": "loadData",
+      "file_path": "src\\pages\\Dashboard.tsx",
+      "line_start": 19,
+      "line_end": 26,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "fetchActivities",
+        "fetchDashboardStats",
+        "setActivities",
+        "setLoading",
+        "setStats"
+      ],
+      "called_by": [
+        "Dashboard",
+        "handleRefresh"
+      ],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "handleRefresh",
+      "file_path": "src\\pages\\Dashboard.tsx",
+      "line_start": 28,
+      "line_end": 30,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "loadData"
+      ],
+      "called_by": [],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "handleExport",
+      "file_path": "src\\pages\\Dashboard.tsx",
+      "line_start": 32,
+      "line_end": 36,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "blob",
+        "fetch",
+        "log"
+      ],
+      "called_by": [],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "Login",
+      "file_path": "src\\pages\\Login.tsx",
+      "line_start": 5,
+      "line_end": 26,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "navigate",
+        "post",
+        "setEmail",
+        "setItem",
+        "setPassword",
+        "useNavigate",
+        "useState"
+      ],
+      "called_by": [],
+      "is_async": false,
+      "is_exported": true
+    },
+    {
+      "name": "handleLogin",
+      "file_path": "src\\pages\\Login.tsx",
+      "line_start": 10,
+      "line_end": 16,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "navigate",
+        "post",
+        "setItem"
+      ],
+      "called_by": [],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "Settings",
+      "file_path": "src\\pages\\Settings.tsx",
+      "line_start": 4,
+      "line_end": 29,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "alert",
+        "confirm",
+        "delete",
+        "handleSave",
+        "preventDefault",
+        "put",
+        "setProfile",
+        "useState"
+      ],
+      "called_by": [],
+      "is_async": false,
+      "is_exported": true
+    },
+    {
+      "name": "handleSave",
+      "file_path": "src\\pages\\Settings.tsx",
+      "line_start": 7,
+      "line_end": 10,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "alert",
+        "put"
+      ],
+      "called_by": [
+        "Settings"
+      ],
+      "is_async": true,
+      "is_exported": true
+    },
+    {
+      "name": "handleDeleteAccount",
+      "file_path": "src\\pages\\Settings.tsx",
+      "line_start": 12,
+      "line_end": 16,
+      "params": [],
+      "return_type": null,
+      "calls": [
+        "confirm",
+        "delete"
+      ],
+      "called_by": [],
+      "is_async": true,
+      "is_exported": true
+    }
+  ],
+  "api_clients": [
+    {
+      "method": "GET",
+      "url_pattern": "/api/dashboard/stats",
+      "file_path": "src\\api\\dashboard.ts",
+      "line": 4,
+      "function_name": "fetchDashboardStats"
+    },
+    {
+      "method": "GET",
+      "url_pattern": "/api/dashboard/activities",
+      "file_path": "src\\api\\dashboard.ts",
+      "line": 9,
+      "function_name": "fetchActivities"
+    },
+    {
+      "method": "POST",
+      "url_pattern": "/api/projects",
+      "file_path": "src\\api\\dashboard.ts",
+      "line": 14,
+      "function_name": "createProject"
+    },
+    {
+      "method": "GET",
+      "url_pattern": "/api/users/{userId}/profile",
+      "file_path": "src\\api\\dashboard.ts",
+      "line": 19,
+      "function_name": "fetchUserProfile"
+    },
+    {
+      "method": "DELETE",
+      "url_pattern": "/api/items/{category}/{id}",
+      "file_path": "src\\api\\dashboard.ts",
+      "line": 24,
+      "function_name": "deleteItem"
+    },
+    {
+      "method": "POST",
+      "url_pattern": "/api/export",
+      "file_path": "src\\pages\\Dashboard.tsx",
+      "line": 33,
+      "function_name": "handleExport"
+    },
+    {
+      "method": "POST",
+      "url_pattern": "/api/auth/login",
+      "file_path": "src\\pages\\Login.tsx",
+      "line": 11,
+      "function_name": "handleLogin"
+    },
+    {
+      "method": "PUT",
+      "url_pattern": "/api/settings/profile",
+      "file_path": "src\\pages\\Settings.tsx",
+      "line": 8,
+      "function_name": "handleSave"
+    },
+    {
+      "method": "DELETE",
+      "url_pattern": "/api/settings/account",
+      "file_path": "src\\pages\\Settings.tsx",
+      "line": 14,
+      "function_name": "handleDeleteAccount"
+    }
+  ],
+  "state_stores": [
+    {
+      "name": "useAppStore",
+      "store_type": "zustand",
+      "file_path": "src\\store\\useAppStore.ts",
+      "state_keys": [
+        "user",
+        "theme",
+        "notifications"
+      ],
+      "actions": [
+        "setUser",
+        "toggleTheme",
+        "clearNotifications"
+      ],
+      "used_in_components": []
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "axios",
+      "current_version": "^1.6.0",
+      "latest_version": null,
+      "dep_type": "Production",
+      "license": null,
+      "vulnerabilities": []
+    },
+    {
+      "name": "react",
+      "current_version": "^18.2.0",
+      "latest_version": null,
+      "dep_type": "Production",
+      "license": null,
+      "vulnerabilities": []
+    },
+    {
+      "name": "react-dom",
+      "current_version": "^18.2.0",
+      "latest_version": null,
+      "dep_type": "Production",
+      "license": null,
+      "vulnerabilities": []
+    },
+    {
+      "name": "react-router-dom",
+      "current_version": "^6.20.0",
+      "latest_version": null,
+      "dep_type": "Production",
+      "license": null,
+      "vulnerabilities": []
+    },
+    {
+      "name": "zustand",
+      "current_version": "^4.4.0",
+      "latest_version": null,
+      "dep_type": "Production",
+      "license": null,
+      "vulnerabilities": []
+    },
+    {
+      "name": "@types/react",
+      "current_version": "^18.2.0",
+      "latest_version": null,
+      "dep_type": "Development",
+      "license": null,
+      "vulnerabilities": []
+    },
+    {
+      "name": "typescript",
+      "current_version": "^5.3.0",
+      "latest_version": null,
+      "dep_type": "Development",
+      "license": null,
+      "vulnerabilities": []
+    },
+    {
+      "name": "vite",
+      "current_version": "^5.0.0",
+      "latest_version": null,
+      "dep_type": "Development",
+      "license": null,
+      "vulnerabilities": []
+    }
+  ]
+}

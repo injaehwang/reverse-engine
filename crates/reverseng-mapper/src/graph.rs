@@ -3,9 +3,13 @@ use reverseng_core::types::analyzer::AnalysisResult;
 use reverseng_core::types::crawler::CrawlResult;
 use reverseng_core::types::mapper::{EdgeType, GraphEdge, GraphNode, NodeType, RelationGraph};
 
+use crate::cross_ref;
+
 pub struct GraphBuilder {
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
+    crawl_data: Option<CrawlResult>,
+    analysis_data: Option<AnalysisResult>,
 }
 
 impl GraphBuilder {
@@ -13,11 +17,14 @@ impl GraphBuilder {
         Self {
             nodes: vec![],
             edges: vec![],
+            crawl_data: None,
+            analysis_data: None,
         }
     }
 
     /// 크롤링 데이터에서 페이지/API 노드와 네비게이션 엣지 추가
     pub fn add_crawl_data(&mut self, crawl: &CrawlResult) -> Result<()> {
+        self.crawl_data = Some(crawl.clone());
         for page in &crawl.pages {
             let node_id = format!("page:{}", page.url);
             self.nodes.push(GraphNode {
@@ -72,6 +79,7 @@ impl GraphBuilder {
 
     /// 코드 분석 데이터에서 컴포넌트/함수 노드와 관계 엣지 추가
     pub fn add_analysis_data(&mut self, analysis: &AnalysisResult) -> Result<()> {
+        self.analysis_data = Some(analysis.clone());
         // 컴포넌트 노드
         for comp in &analysis.components {
             let node_id = format!("comp:{}", comp.name);
@@ -142,8 +150,34 @@ impl GraphBuilder {
 
     /// 크롤링 결과와 코드 분석 결과 교차 검증
     pub fn cross_reference(&mut self) -> Result<()> {
-        // TODO: URL↔라우트 매칭, API 호출 교차 확인
+        let (Some(crawl), Some(analysis)) = (&self.crawl_data, &self.analysis_data) else {
+            return Ok(());
+        };
+
+        let report = cross_ref::cross_reference(crawl, analysis);
+
+        // 매칭된 API: 코드 노드 ↔ 크롤링 노드 연결
+        for matched in &report.matched_apis {
+            let code_id = format!("func:{}", matched.code_function);
+            for obs_url in &matched.observed_urls {
+                let page_id = format!("page:{}", obs_url);
+                self.edges.push(GraphEdge {
+                    from_id: page_id,
+                    to_id: code_id.clone(),
+                    edge_type: EdgeType::Calls,
+                    label: Some(format!("{} {}", matched.method, matched.url_pattern)),
+                    metadata: None,
+                });
+            }
+        }
+
         Ok(())
+    }
+
+    /// 교차 검증 보고서 반환
+    pub fn get_cross_ref_report(&self) -> Option<cross_ref::CrossRefReport> {
+        let (crawl, analysis) = (self.crawl_data.as_ref()?, self.analysis_data.as_ref()?);
+        Some(cross_ref::cross_reference(crawl, analysis))
     }
 
     pub fn build(self) -> RelationGraph {

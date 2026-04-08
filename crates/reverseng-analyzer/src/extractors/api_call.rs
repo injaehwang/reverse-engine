@@ -56,9 +56,7 @@ fn extract_fetch_call(
 
     // 첫 번째 인자 = URL
     let url_node = children.get(1)?; // 0번은 '('
-    let url_pattern = node_text(url_node, source)
-        .trim_matches(&['"', '\'', '`'] as &[char])
-        .to_string();
+    let url_pattern = extract_url_pattern(url_node, source);
 
     // 두 번째 인자에서 method 추출
     let method = if children.len() > 3 {
@@ -112,9 +110,7 @@ fn extract_axios_call(
     let children: Vec<_> = args.children(&mut cursor).collect();
 
     let url_node = children.get(1)?;
-    let url_pattern = node_text(url_node, source)
-        .trim_matches(&['"', '\'', '`'] as &[char])
-        .to_string();
+    let url_pattern = extract_url_pattern(url_node, source);
 
     let function_name = find_enclosing_function_name(node, source);
 
@@ -125,6 +121,81 @@ fn extract_axios_call(
         line: node.start_position().row + 1,
         function_name,
     })
+}
+
+/// URL 패턴 추출 — 정적 문자열, 템플릿 리터럴, 문자열 연결 처리
+fn extract_url_pattern(node: &tree_sitter::Node, source: &str) -> String {
+    let text = node_text(node, source);
+
+    match node.kind() {
+        // 일반 문자열: '/api/stats'
+        "string" => text.trim_matches(&['"', '\''] as &[char]).to_string(),
+
+        // 템플릿 리터럴: `/api/users/${id}`
+        "template_string" => {
+            let mut result = String::new();
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                match child.kind() {
+                    "string_fragment" | "template_chars" => {
+                        result.push_str(node_text(&child, source));
+                    }
+                    "template_substitution" => {
+                        // ${expr} → {:param} 로 변환
+                        let expr = node_text(&child, source);
+                        let param_name = expr
+                            .trim_start_matches("${")
+                            .trim_end_matches('}')
+                            .trim();
+                        result.push_str(&format!("{{{}}}", param_name));
+                    }
+                    _ => {} // ` 기호 등 무시
+                }
+            }
+            if result.is_empty() {
+                // fallback: 전체 텍스트에서 백틱 제거
+                text.trim_matches('`').to_string()
+            } else {
+                result
+            }
+        }
+
+        // 문자열 연결: '/api/users/' + id
+        "binary_expression" => {
+            let mut parts = Vec::new();
+            collect_concat_parts(node, source, &mut parts);
+            parts.join("")
+        }
+
+        // 변수 참조 등 기타: 원본 텍스트 그대로
+        _ => text.trim_matches(&['"', '\'', '`'] as &[char]).to_string(),
+    }
+}
+
+/// 문자열 연결(+)의 부분들을 재귀적으로 수집
+fn collect_concat_parts(node: &tree_sitter::Node, source: &str, parts: &mut Vec<String>) {
+    if node.kind() == "binary_expression" {
+        let op = node.children(&mut node.walk())
+            .find(|c| c.kind() == "+")
+            .is_some();
+
+        if op {
+            if let Some(left) = find_child_by_field(node, "left") {
+                collect_concat_parts(&left, source, parts);
+            }
+            if let Some(right) = find_child_by_field(node, "right") {
+                collect_concat_parts(&right, source, parts);
+            }
+            return;
+        }
+    }
+
+    let text = node_text(node, source);
+    match node.kind() {
+        "string" => parts.push(text.trim_matches(&['"', '\''] as &[char]).to_string()),
+        "template_string" => parts.push(text.trim_matches('`').to_string()),
+        _ => parts.push(format!("{{{}}}", text)), // 변수는 {변수명}으로 표시
+    }
 }
 
 /// 가장 가까운 함수 이름 찾기 (위로 탐색)

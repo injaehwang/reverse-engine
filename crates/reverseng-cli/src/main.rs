@@ -94,6 +94,10 @@ enum Commands {
     Upgrade {
         /// 프로젝트 경로
         path: Option<String>,
+
+        /// 변경 영향도 분석 대상 (컴포넌트/함수 이름)
+        #[arg(long)]
+        impact: Option<String>,
     },
 
     /// 전체 파이프라인 실행 (crawl → analyze → report → test)
@@ -154,8 +158,8 @@ async fn main() -> anyhow::Result<()> {
         } => {
             commands::test::run(input, r#type, output).await?;
         }
-        Commands::Upgrade { path } => {
-            commands::upgrade::run(path)?;
+        Commands::Upgrade { path, impact } => {
+            commands::upgrade::run(path, impact)?;
         }
         Commands::Full {
             url,

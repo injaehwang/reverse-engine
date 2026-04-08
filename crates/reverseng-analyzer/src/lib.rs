@@ -1,12 +1,15 @@
+pub mod cache;
 pub mod extractors;
 pub mod framework;
 pub mod parsers;
 
 use anyhow::Result;
+use cache::AnalysisCache;
 use rayon::prelude::*;
 use reverseng_core::types::analyzer::{
-    AnalysisResult, ApiClientCall, ComponentInfo, FunctionInfo, RouteInfo,
+    AnalysisResult, ApiClientCall, ComponentInfo, FunctionInfo, RouteInfo, StateStoreInfo,
 };
+use std::collections::HashMap;
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -15,12 +18,76 @@ pub fn analyze_project(source_path: &Path) -> Result<AnalysisResult> {
     let framework = framework::detect_framework(source_path)?;
     tracing::info!("감지된 프레임워크: {:?}", framework);
 
-    // 1. 분석 대상 파일 수집
+    // 1. 분석 대상 파일 수집 + 해시 계산
     let source_files = collect_source_files(source_path);
     tracing::info!("분석 대상 파일: {}개", source_files.len());
 
-    // 2. 각 파일을 병렬로 파싱 및 추출
-    let file_results: Vec<FileAnalysis> = source_files
+    let file_hashes: Vec<(std::path::PathBuf, String)> = source_files
+        .par_iter()
+        .filter_map(|path| {
+            cache::hash_file(path)
+                .ok()
+                .map(|hash| (path.clone(), hash))
+        })
+        .collect();
+
+    // 2. 캐시 확인 → 증분 분석
+    let cached = AnalysisCache::load(source_path);
+    // 경로를 forward slash로 정규화 (Windows/Unix 통일)
+    let hash_map: HashMap<String, String> = file_hashes
+        .iter()
+        .map(|(p, h)| (p.to_string_lossy().replace('\\', "/"), h.clone()))
+        .collect();
+
+    let (files_to_analyze, cached_results) = if let Some(ref cache) = cached {
+        let diff = cache::compute_diff(&file_hashes, &cache.file_hashes);
+        tracing::info!(
+            "증분 분석: 변경 {}개, 삭제 {}개, 변경없음 {}개",
+            diff.changed.len(),
+            diff.deleted.len(),
+            diff.unchanged_count
+        );
+
+        if diff.changed.is_empty() && diff.deleted.is_empty() {
+            tracing::info!("변경 없음, 캐시된 결과 반환");
+            return Ok(cache.result.clone());
+        }
+
+        // 캐시에서 삭제/변경된 파일의 결과를 제거
+        let mut cached_result = cache.result.clone();
+
+        let mut remove_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // 변경된 파일의 상대 경로 (forward slash 정규화)
+        for p in &diff.changed {
+            if let Ok(rel) = p.strip_prefix(source_path) {
+                remove_set.insert(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+
+        // 삭제된 파일의 상대 경로
+        for p in &diff.deleted {
+            if let Ok(rel) = Path::new(p).strip_prefix(source_path) {
+                remove_set.insert(rel.to_string_lossy().replace('\\', "/"));
+            } else {
+                remove_set.insert(p.replace('\\', "/"));
+            }
+        }
+
+        // file_path도 정규화해서 비교
+        cached_result.components.retain(|c| !remove_set.contains(&c.file_path.replace('\\', "/")));
+        cached_result.functions.retain(|f| !remove_set.contains(&f.file_path.replace('\\', "/")));
+        cached_result.api_clients.retain(|a| !remove_set.contains(&a.file_path.replace('\\', "/")));
+        cached_result.routes.retain(|r| !remove_set.contains(&r.file_path.replace('\\', "/")));
+        cached_result.state_stores.retain(|s| !remove_set.contains(&s.file_path.replace('\\', "/")));
+
+        (diff.changed, Some(cached_result))
+    } else {
+        (source_files, None)
+    };
+
+    // 3. 변경된 파일만 병렬 분석
+    let file_results: Vec<FileAnalysis> = files_to_analyze
         .par_iter()
         .filter_map(|file_path| {
             match analyze_single_file(file_path, source_path) {
@@ -33,23 +100,40 @@ pub fn analyze_project(source_path: &Path) -> Result<AnalysisResult> {
         })
         .collect();
 
-    // 3. 결과 통합
+    // 4. 결과 통합 (캐시 + 새 분석)
     let mut components = Vec::new();
     let mut functions = Vec::new();
     let mut api_clients = Vec::new();
     let mut routes = Vec::new();
+    let mut state_stores = Vec::new();
+
+    if let Some(cached) = cached_results {
+        components.extend(cached.components);
+        functions.extend(cached.functions);
+        api_clients.extend(cached.api_clients);
+        routes.extend(cached.routes);
+        state_stores.extend(cached.state_stores);
+    }
 
     for result in &file_results {
         components.extend(result.components.clone());
         functions.extend(result.functions.clone());
         api_clients.extend(result.api_clients.clone());
         routes.extend(result.routes.clone());
+        state_stores.extend(result.state_stores.clone());
     }
 
-    // 4. 호출 관계 역참조 구축 (called_by, used_by)
+    // 5. 호출 관계 역참조 전체 재구축 (캐시+신규 통합 후)
+    // called_by/used_by를 초기화 후 다시 계산
+    for f in &mut functions {
+        f.called_by.clear();
+    }
+    for c in &mut components {
+        c.used_by.clear();
+    }
     build_reverse_references(&mut functions, &mut components);
 
-    // 5. 의존성 분석
+    // 6. 의존성 분석
     let dependencies = extractors::dependency::extract_dependencies(source_path)?;
 
     tracing::info!(
@@ -61,16 +145,24 @@ pub fn analyze_project(source_path: &Path) -> Result<AnalysisResult> {
         dependencies.len(),
     );
 
-    Ok(AnalysisResult {
+    let result = AnalysisResult {
         source_path: source_path.to_string_lossy().into(),
         framework,
         components,
         routes,
         functions,
         api_clients,
-        state_stores: vec![], // TODO
+        state_stores,
         dependencies,
-    })
+    };
+
+    // 7. 캐시 저장
+    let new_cache = AnalysisCache::new(hash_map, result.clone());
+    if let Err(e) = new_cache.save(source_path) {
+        tracing::warn!("캐시 저장 실패: {}", e);
+    }
+
+    Ok(result)
 }
 
 /// 개별 파일 분석 결과
@@ -79,6 +171,7 @@ struct FileAnalysis {
     functions: Vec<FunctionInfo>,
     api_clients: Vec<ApiClientCall>,
     routes: Vec<RouteInfo>,
+    state_stores: Vec<StateStoreInfo>,
 }
 
 /// 단일 파일 분석
@@ -105,6 +198,7 @@ fn analyze_single_file(file_path: &Path, project_root: &Path) -> Result<FileAnal
             functions: vec![],
             api_clients: vec![],
             routes: vec![],
+            state_stores: vec![],
         }),
     };
 
@@ -112,12 +206,14 @@ fn analyze_single_file(file_path: &Path, project_root: &Path) -> Result<FileAnal
     let functions = extractors::function::extract(&tree, &source, &relative_path)?;
     let api_clients = extractors::api_call::extract(&tree, &source, &relative_path)?;
     let routes = extractors::route::extract(&tree, &source, &relative_path)?;
+    let state_stores = extractors::state::extract(&tree, &source, &relative_path)?;
 
     Ok(FileAnalysis {
         components,
         functions,
         api_clients,
         routes,
+        state_stores,
     })
 }
 
