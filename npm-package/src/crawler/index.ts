@@ -127,7 +127,49 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       const state = sm.addState(hash, { url: task.url, title, contentHash: hash, screenshotPath: ssPath, contentScreenshotPath: csPath, annotatedScreenshots: [], elements, apiCalls: apis });
       if (task.parentId) sm.addTransition({ fromStateId: task.parentId, toStateId: state.id, triggerType: 'link', triggerText: `→ ${title}`, triggerPosition: null, annotatedScreenshotPath: null });
 
-      // 클릭 탐색
+      // ── 네비게이션 영역 클릭 탐색 (SPA 메뉴: div, li, span 등) ──
+      const navItems = await scanNavClickables(page, shell.contentSelector);
+      if (navItems.length > 0) {
+        log(`[${n}] 네비게이션 메뉴 탐색 중... (${navItems.length}개)`);
+        for (let i = 0; i < navItems.length; i++) {
+          const item = navItems[i];
+          try {
+            const bUrl = page.url();
+            const bHash = await computeContentHash(page, shell.contentSelector).catch(() => '');
+
+            await page.mouse.click(item.x, item.y);
+            await page.waitForTimeout(800);
+            await waitForVisualStability(page, 2000);
+
+            const aUrl = page.url();
+            const aHash = await computeContentHash(page, shell.contentSelector).catch(() => '');
+            const urlChanged = aUrl !== bUrl;
+            const contentChanged = aHash !== bHash && aHash !== '';
+            const isNew = !sm.hasState(aHash);
+
+            if ((urlChanged || contentChanged) && isNew) {
+              log(`  [nav ${i + 1}/${navItems.length}] "${item.text}" → 새 화면 발견`);
+              queue.push({ url: aUrl, depth: task.depth + 1, parentId: state.id });
+
+              // 원래 페이지로 복원
+              if (urlChanged) {
+                await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+                await waitForVisualStability(page, 2000);
+              } else {
+                // URL 안 바뀌고 콘텐츠만 바뀐 경우 — 원래 URL로 재이동
+                await page.goto(task.url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+                await waitForVisualStability(page, 2000);
+              }
+            } else if (urlChanged) {
+              // 이미 방문한 화면이면 복원만
+              await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+              await waitForVisualStability(page, 2000);
+            }
+          } catch { /* skip */ }
+        }
+      }
+
+      // ── 콘텐츠 영역 클릭 탐색 ──
       log(`[${n}] 동작 확인 중... (${elements.buttons.length}개)`);
       for (let i = 0; i < elements.buttons.length; i++) {
         const btn = elements.buttons[i];
@@ -207,6 +249,71 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   }));
 
   return { targetUrl: url, states, transitions, timestamp: new Date().toISOString(), pages };
+}
+
+// ─── 네비게이션 영역 클릭 가능 요소 수집 (SPA 메뉴 대응) ───
+async function scanNavClickables(page: Page, contentSelector: string): Promise<{ text: string; x: number; y: number }[]> {
+  return page.evaluate((contentSel) => {
+    const contentEl = document.querySelector(contentSel);
+    const items: { text: string; x: number; y: number }[] = [];
+    const seen = new Set<string>();
+
+    // nav, aside, header, sidebar 영역 + role="navigation" 내부 요소
+    const navAreas = document.querySelectorAll(
+      'nav, aside, header, [role="navigation"], [class*="sidebar"], [class*="menu"], [class*="nav"]'
+    );
+
+    for (const area of Array.from(navAreas)) {
+      // 콘텐츠 영역 내부이면 스킵
+      if (contentEl && contentEl.contains(area)) continue;
+
+      // 클릭 가능한 요소 수집: a, li, div, span 중 cursor:pointer이거나 role 있는 것
+      const candidates = area.querySelectorAll(
+        'a, li, [role="link"], [role="menuitem"], [role="tab"], [role="button"]'
+      );
+      for (const el of Array.from(candidates)) {
+        const htmlEl = el as HTMLElement;
+        const rect = htmlEl.getBoundingClientRect();
+        if (rect.width < 10 || rect.height < 10) continue;
+        if (rect.top < 0 || rect.top >= window.innerHeight) continue;
+
+        const text = htmlEl.textContent?.trim().slice(0, 60) || '';
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+
+        items.push({
+          text,
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+        });
+      }
+
+      // cursor:pointer인 div, span, li도 수집 (React/Vue SPA 메뉴)
+      const allEls = area.querySelectorAll('div, span, li, label');
+      for (const el of Array.from(allEls)) {
+        const htmlEl = el as HTMLElement;
+        if (window.getComputedStyle(htmlEl).cursor !== 'pointer') continue;
+        // 이미 위에서 잡은 요소의 자식이면 스킵
+        if (htmlEl.querySelector('a, [role="link"], [role="menuitem"]')) continue;
+
+        const rect = htmlEl.getBoundingClientRect();
+        if (rect.width < 10 || rect.height < 10) continue;
+        if (rect.top < 0 || rect.top >= window.innerHeight) continue;
+
+        const text = htmlEl.textContent?.trim().slice(0, 60) || '';
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+
+        items.push({
+          text,
+          x: Math.round(rect.left + rect.width / 2),
+          y: Math.round(rect.top + rect.height / 2),
+        });
+      }
+    }
+
+    return items;
+  }, contentSelector);
 }
 
 // ─── 전체 페이지 링크 수집 (네비게이션/메뉴 포함) ───
