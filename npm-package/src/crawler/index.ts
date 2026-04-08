@@ -180,8 +180,9 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
         } catch { /* skip */ }
       }
 
-      // 링크 큐잉
-      for (const link of elements.links) {
+      // 링크 큐잉 — 네비게이션/메뉴 포함 전체 페이지에서 링크 수집
+      const allLinks = await scanAllLinks(page);
+      for (const link of allLinks) {
         try { const u = new URL(link.href, task.url); if (u.hostname === baseHost && !visited.has(normalizeUrl(u.href))) queue.push({ url: u.href, depth: task.depth + 1, parentId: state.id }); } catch {}
       }
 
@@ -206,6 +207,18 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   }));
 
   return { targetUrl: url, states, transitions, timestamp: new Date().toISOString(), pages };
+}
+
+// ─── 전체 페이지 링크 수집 (네비게이션/메뉴 포함) ───
+async function scanAllLinks(page: Page): Promise<{ text: string; href: string }[]> {
+  return page.evaluate(() => {
+    return Array.from(document.querySelectorAll('a[href]'))
+      .map(a => ({
+        text: (a as HTMLAnchorElement).textContent?.trim().slice(0, 80) || '',
+        href: (a as HTMLAnchorElement).href,
+      }))
+      .filter(l => l.href && !l.href.startsWith('javascript:') && !l.href.startsWith('#'));
+  });
 }
 
 // ─── 콘텐츠 영역 요소 스캔 ───
