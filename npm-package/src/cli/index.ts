@@ -267,17 +267,24 @@ program
     console.log(chalk.green('▶'), '분석 시작:', chalk.cyan(url));
     console.log(`  최대 깊이: ${opts.maxDepth} | 최대 페이지: ${opts.maxPages}`);
 
-    const result = await crawl({
-      url,
-      maxDepth: parseInt(opts.maxDepth),
-      maxPages: parseInt(opts.maxPages),
-      screenshot: opts.screenshot !== false,
-      headless: opts.headless !== false,
-      outputDir,
-      waitTime: parseInt(opts.wait),
-      auth: buildAuth(opts, url),
-      onProgress: (msg) => progressLine(0, 0, msg),
-    });
+    let result;
+    try {
+      result = await crawl({
+        url,
+        maxDepth: parseInt(opts.maxDepth),
+        maxPages: parseInt(opts.maxPages),
+        screenshot: opts.screenshot !== false,
+        headless: opts.headless !== false,
+        outputDir,
+        waitTime: parseInt(opts.wait),
+        auth: buildAuth(opts, url),
+        onProgress: (msg) => progressLine(0, 0, msg),
+      });
+    } catch (e: any) {
+      clearLine();
+      console.log(chalk.red('✗'), e.message || String(e));
+      process.exit(1);
+    }
 
     clearLine();
     console.log(chalk.green('✓'), `분석 완료!`);

@@ -45,6 +45,18 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   log('⚠️  경고: 이 도구는 개발/테스트 환경 전용입니다. 크롤러가 버튼 클릭, 폼 제출을 자동 수행하므로 실제 데이터가 변경될 수 있습니다.');
   log('🔍 분석 시작: ' + url);
 
+  // 대상 서버 접근 가능 여부 확인
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    await fetch(url, { signal: controller.signal, redirect: 'follow' });
+    clearTimeout(timer);
+  } catch {
+    log('✗ 분석 대상이 유효하지 않습니다: ' + url);
+    await flushLog();
+    throw new Error(`분석 대상이 유효하지 않습니다. 서버가 실행 중인지 확인하세요: ${url}`);
+  }
+
   const browser = await chromium.launch({ headless });
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, locale: 'ko-KR', ignoreHTTPSErrors: true });
 
