@@ -74,12 +74,13 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   log('콘텐츠 영역: ' + shell.contentSelector);
   await initPage.close();
 
-  // 탐색 큐
+  // 탐색 큐 (DFS: pop으로 깊이 우선)
   const queue: { url: string; depth: number; parentId?: string }[] = [{ url, depth: 0 }];
   const visited = new Set<string>();
+  const clickedItems = new Set<string>(); // 클릭 중복 방지: "url|text|x,y"
 
   while (queue.length > 0 && sm.stateCount < maxPages) {
-    const task = queue.shift()!;
+    const task = queue.pop()! // DFS: 깊이 우선 탐색;
     const norm = normalizeUrl(task.url);
     if (visited.has(norm) || task.depth > maxDepth) continue;
     if (ignorePatterns.some(p => norm.includes(p))) continue;
@@ -127,12 +128,16 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       const state = sm.addState(hash, { url: task.url, title, contentHash: hash, screenshotPath: ssPath, contentScreenshotPath: csPath, annotatedScreenshots: [], elements, apiCalls: apis });
       if (task.parentId) sm.addTransition({ fromStateId: task.parentId, toStateId: state.id, triggerType: 'link', triggerText: `→ ${title}`, triggerPosition: null, annotatedScreenshotPath: null });
 
-      // ── 네비게이션 영역 클릭 탐색 (SPA 메뉴: div, li, span 등) ──
+      // ── 1단계: 네비게이션 메뉴 클릭 탐색 (SPA 메뉴) ──
       const navItems = await scanNavClickables(page, shell.contentSelector);
       if (navItems.length > 0) {
         log(`[${n}] 네비게이션 메뉴 탐색 중... (${navItems.length}개)`);
         for (let i = 0; i < navItems.length; i++) {
           const item = navItems[i];
+          const clickKey = `nav|${item.text}|${item.x},${item.y}`;
+          if (clickedItems.has(clickKey)) continue;
+          clickedItems.add(clickKey);
+
           try {
             const bUrl = page.url();
             const bHash = await computeContentHash(page, shell.contentSelector).catch(() => '');
@@ -150,34 +155,101 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
             if ((urlChanged || contentChanged) && isNew) {
               log(`  [nav ${i + 1}/${navItems.length}] "${item.text}" → 새 화면 발견`);
               queue.push({ url: aUrl, depth: task.depth + 1, parentId: state.id });
+            }
 
-              // 원래 페이지로 복원
-              if (urlChanged) {
-                await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
-                await waitForVisualStability(page, 2000);
-              } else {
-                // URL 안 바뀌고 콘텐츠만 바뀐 경우 — 원래 URL로 재이동
-                await page.goto(task.url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-                await waitForVisualStability(page, 2000);
-              }
-            } else if (urlChanged) {
-              // 이미 방문한 화면이면 복원만
+            // 복원
+            if (urlChanged) {
               await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+              await waitForVisualStability(page, 2000);
+            } else if (contentChanged) {
+              await page.goto(task.url, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
               await waitForVisualStability(page, 2000);
             }
           } catch { /* skip */ }
         }
       }
 
-      // ── 콘텐츠 영역 클릭 탐색 ──
-      log(`[${n}] 동작 확인 중... (${elements.buttons.length}개)`);
-      for (let i = 0; i < elements.buttons.length; i++) {
-        const btn = elements.buttons[i];
+      // ── 2단계: 폼 자동 입력 + 제출 ──
+      if (elements.forms.length > 0) {
+        log(`[${n}] 폼 입력 중... (${elements.forms.length}개)`);
+        for (let fi = 0; fi < elements.forms.length; fi++) {
+          const form = elements.forms[fi];
+          const formKey = `form|${task.url}|${form.id || fi}`;
+          if (clickedItems.has(formKey)) continue;
+          clickedItems.add(formKey);
+
+          try {
+            const bUrl = page.url();
+            const bHash = await computeContentHash(page, shell.contentSelector).catch(() => '');
+
+            // 폼 필드 자동 입력
+            const formSel = form.id ? `#${form.id}` : `form:nth-of-type(${fi + 1})`;
+            for (const field of form.fields || []) {
+              if (!field.name) continue;
+              const val = autoFillValue(field.fieldType, field.name);
+              try {
+                const input = page.locator(`${formSel} [name="${field.name}"]`).first();
+                if (await input.isVisible({ timeout: 1000 }).catch(() => false)) {
+                  if (field.fieldType === 'select') {
+                    await input.selectOption({ index: 1 }).catch(() => {});
+                  } else if (field.fieldType === 'checkbox' || field.fieldType === 'radio') {
+                    await input.check().catch(() => {});
+                  } else {
+                    await input.fill(val);
+                  }
+                }
+              } catch { /* skip field */ }
+            }
+
+            // 제출
+            const submitBtn = page.locator(`${formSel} button[type="submit"], ${formSel} input[type="submit"], ${formSel} button:not([type])`).first();
+            if (await submitBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+              await submitBtn.click();
+            } else {
+              // submit 버튼 없으면 form submit 이벤트
+              await page.locator(formSel).first().evaluate((el: HTMLFormElement) => el.submit()).catch(() => {});
+            }
+
+            await page.waitForTimeout(1000);
+            await waitForVisualStability(page, 3000);
+
+            const aUrl = page.url();
+            const aHash = await computeContentHash(page, shell.contentSelector).catch(() => '');
+            const urlChanged = aUrl !== bUrl;
+            const contentChanged = aHash !== bHash && aHash !== '';
+
+            if (urlChanged || contentChanged) {
+              const isNew = !sm.hasState(aHash);
+              log(`  [폼 ${fi + 1}] "${form.id || '폼'}" 제출 → ${urlChanged ? '이동' : '변화'}${isNew ? ' (새 화면)' : ''}`);
+              if (isNew && urlChanged) queue.push({ url: aUrl, depth: task.depth + 1, parentId: state.id });
+            }
+
+            // 복원
+            if (urlChanged) {
+              await page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+              await waitForVisualStability(page, 2000);
+            }
+          } catch { /* skip form */ }
+        }
+      }
+
+      // ── 3단계: 콘텐츠 영역 버튼 클릭 탐색 (새 화면 발견 시만) ──
+      const newButtons = elements.buttons.filter((btn: any) => {
+        const key = `btn|${task.url}|${btn.text}|${btn.x},${btn.y}`;
+        return !clickedItems.has(key);
+      });
+      if (newButtons.length > 0) {
+        log(`[${n}] 버튼 탐색 중... (${newButtons.length}개)`);
+      }
+      for (let i = 0; i < newButtons.length; i++) {
+        const btn = newButtons[i];
+        const clickKey = `btn|${task.url}|${btn.text}|${btn.x},${btn.y}`;
+        clickedItems.add(clickKey);
+
         try {
           const bUrl = page.url();
           const bHash = await computeContentHash(page, shell.contentSelector).catch(() => '');
 
-          // 클릭 위치 표시 스크린샷
           let annoPath: string | null = null;
           if (screenshot) {
             ssN++;
@@ -199,20 +271,18 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
 
           if (urlChanged || contentChanged || hasModal) {
             const what = hasModal ? '모달' : urlChanged ? '이동' : '변화';
-            log(`  [${i + 1}/${elements.buttons.length}] "${btn.text}" → ${what}${isNew ? ' (새 화면)' : ''}`);
-
-            let resultPath: string | null = null;
-            if (screenshot) { ssN++; resultPath = join(ssDir, `${String(ssN).padStart(3, '0')}_result_${safePath(btn.text || 'r')}.png`); await screenshotViewport(page, resultPath); }
+            log(`  [${i + 1}/${newButtons.length}] "${btn.text}" → ${what}${isNew ? ' (새 화면)' : ''}`);
 
             if (isNew && (contentChanged || urlChanged)) {
+              let resultPath: string | null = null;
+              if (screenshot) { ssN++; resultPath = join(ssDir, `${String(ssN).padStart(3, '0')}_result_${safePath(btn.text || 'r')}.png`); await screenshotViewport(page, resultPath); }
+
               const newTitle = await deriveTitle(page, shell.contentSelector);
               const newEls = await scanContent(page, shell.contentSelector).catch(() => ({ links: [] as any[], buttons: [] as any[], forms: [] as any[] }));
               const ns = sm.addState(aHash, { url: aUrl, title: newTitle, contentHash: aHash, screenshotPath: resultPath, contentScreenshotPath: null, annotatedScreenshots: annoPath ? [annoPath] : [], elements: newEls, apiCalls: [] });
               sm.addTransition({ fromStateId: state.id, toStateId: ns.id, triggerType: 'click', triggerText: btn.text || btn.selector, triggerPosition: { x: btn.x, y: btn.y }, annotatedScreenshotPath: annoPath });
               if (urlChanged) queue.push({ url: aUrl, depth: task.depth + 1, parentId: ns.id });
               log(`  → "${newTitle}" (${ns.id})`);
-            } else if (sm.hasState(aHash)) {
-              sm.addTransition({ fromStateId: state.id, toStateId: sm.getState(aHash)!.id, triggerType: 'click', triggerText: btn.text || btn.selector, triggerPosition: { x: btn.x, y: btn.y }, annotatedScreenshotPath: annoPath });
             }
 
             // 복원
@@ -222,7 +292,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
         } catch { /* skip */ }
       }
 
-      // 링크 큐잉 — 네비게이션/메뉴 포함 전체 페이지에서 링크 수집
+      // ── 4단계: 전체 페이지 링크 수집 (a[href]) ──
       const allLinks = await scanAllLinks(page);
       for (const link of allLinks) {
         try { const u = new URL(link.href, task.url); if (u.hostname === baseHost && !visited.has(normalizeUrl(u.href))) queue.push({ url: u.href, depth: task.depth + 1, parentId: state.id }); } catch {}
@@ -420,6 +490,38 @@ async function handleAuth(ctx: BrowserContext, baseUrl: string, auth: AuthOption
 
 async function tryFill(p: Page, sels: string[], val: string): Promise<boolean> {
   for (const s of sels) { try { const e = p.locator(s).first(); if (await e.isVisible({ timeout: 1000 })) { await e.fill(val); return true; } } catch {} } return false;
+}
+
+// ─── 폼 자동 입력값 생성 ───
+function autoFillValue(fieldType: string, fieldName: string): string {
+  const name = fieldName.toLowerCase();
+  // 이름 기반 추론 (우선)
+  if (name.includes('email') || name.includes('mail')) return 'test@example.com';
+  if (name.includes('password') || name.includes('pw') || name.includes('passwd')) return 'TestPass123!';
+  if (name.includes('phone') || name.includes('tel') || name.includes('mobile')) return '010-1234-5678';
+  if (name.includes('name') || name.includes('이름')) return '테스트 사용자';
+  if (name.includes('title') || name.includes('제목')) return '테스트 항목';
+  if (name.includes('content') || name.includes('내용') || name.includes('desc') || name.includes('설명')) return '자동 생성된 테스트 데이터입니다.';
+  if (name.includes('address') || name.includes('주소')) return '서울시 강남구 테스트로 123';
+  if (name.includes('search') || name.includes('query') || name.includes('keyword') || name.includes('검색')) return 'test';
+  if (name.includes('url') || name.includes('link') || name.includes('홈페이지')) return 'https://example.com';
+  if (name.includes('amount') || name.includes('price') || name.includes('금액')) return '10000';
+  if (name.includes('count') || name.includes('qty') || name.includes('수량')) return '1';
+  // 타입 기반
+  switch (fieldType) {
+    case 'email': return 'test@example.com';
+    case 'password': return 'TestPass123!';
+    case 'tel': return '010-1234-5678';
+    case 'number': return '42';
+    case 'url': return 'https://example.com';
+    case 'date': return '2026-01-15';
+    case 'datetime-local': return '2026-01-15T10:00';
+    case 'time': return '10:00';
+    case 'color': return '#3498db';
+    case 'range': return '50';
+    case 'textarea': return '자동 생성된 테스트 데이터입니다.\n여러 줄 입력 테스트.';
+    default: return '테스트 입력';
+  }
 }
 
 // ─── 유틸 ───
