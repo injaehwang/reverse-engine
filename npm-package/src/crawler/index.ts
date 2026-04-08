@@ -39,7 +39,8 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const log = (msg: string) => { logLines.push(`[${new Date().toISOString().slice(11, 23)}] ${msg}`); onProgress?.(msg); };
   const flushLog = () => writeFile(logPath, logLines.join('\n'), 'utf-8');
 
-  log('🔍 서비스 분석 시작: ' + url);
+  log('⚠️  경고: 이 도구는 개발/테스트 환경 전용입니다. 크롤러가 버튼 클릭, 폼 제출을 자동 수행하므로 실제 데이터가 변경될 수 있습니다.');
+  log('🔍 분석 시작: ' + url);
 
   const browser = await chromium.launch({ headless });
   const ctx = await browser.newContext({ viewport: { width: 1920, height: 1080 }, locale: 'ko-KR', ignoreHTTPSErrors: true });
@@ -75,7 +76,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
 
     try {
       const n = sm.stateCount + 1;
-      log(`[${n}] 화면 이동 중: ${task.url}`);
+      log(`[${n}] 분석 중: ${task.url}`);
       await page.goto(task.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
       // 도메인 체크
@@ -217,7 +218,17 @@ async function scanContent(page: Page, contentSelector: string) {
 
 // ─── 네트워크 ───
 function captureNetwork(page: Page, apis: VisualState['apiCalls']) {
-  page.on('response', r => { try { const q = r.request(); const t = q.resourceType(); if ((t === 'xhr' || t === 'fetch') && !/\.(js|css|png|jpg|svg|woff|ico|map)(\?|$)/i.test(q.url())) apis.push({ method: q.method(), url: q.url(), responseStatus: r.status(), triggeredBy: null }); } catch {} });
+  let stopped = false;
+  page.on('response', r => {
+    if (stopped) return;
+    try {
+      const q = r.request(); const t = q.resourceType();
+      if ((t === 'xhr' || t === 'fetch') && !/\.(js|css|png|jpg|svg|woff|ico|map)(\?|$)/i.test(q.url())) {
+        apis.push({ method: q.method(), url: q.url(), responseStatus: r.status(), triggeredBy: null });
+      }
+    } catch { /* 페이지 닫힌 후 도착한 응답 무시 */ }
+  });
+  page.on('close', () => { stopped = true; });
 }
 
 // ─── 인증 ───

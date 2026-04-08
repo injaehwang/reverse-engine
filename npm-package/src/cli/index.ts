@@ -252,7 +252,9 @@ program
     }
 
     const outputDir = opts.output || DEFAULT_OUTPUT;
-    console.log(chalk.green('▶'), '크롤링 시작:', chalk.cyan(url));
+    console.log(chalk.yellow('⚠'), '이 도구는 개발/테스트 환경 전용입니다.');
+    console.log('  크롤러가 버튼 클릭, 폼 제출을 자동 수행하므로 실제 데이터가 변경될 수 있습니다.\n');
+    console.log(chalk.green('▶'), '분석 시작:', chalk.cyan(url));
     console.log(`  최대 깊이: ${opts.maxDepth} | 최대 페이지: ${opts.maxPages}`);
 
     const result = await crawl({
@@ -268,7 +270,7 @@ program
     });
 
     clearLine();
-    console.log(chalk.green('✓'), `크롤링 완료!`);
+    console.log(chalk.green('✓'), `분석 완료!`);
     console.log(`  페이지: ${result.pages.length}개`);
     console.log(`  API 호출: ${result.pages.reduce((n, p) => n + p.apiCalls.length, 0)}개`);
 
@@ -316,10 +318,11 @@ program
     const analysisPath = join(outputDir, 'analysis.json');
     const crawlResultPath = join(outputDir, 'crawl-result.json');
 
-    // ── 크롤링 ──
+    // ── 서비스 분석 ──
     if (crawlUrl) {
       console.log(chalk.gray('━'.repeat(50)));
-      console.log(chalk.green('▶'), '크롤링:', chalk.cyan(crawlUrl));
+      console.log(chalk.yellow('⚠'), '개발/테스트 환경 전용 — 실제 데이터가 변경될 수 있습니다.');
+      console.log(chalk.green('▶'), '분석 중:', chalk.cyan(crawlUrl));
 
       const auth = buildAuth(opts, crawlUrl);
       const crawlResult = await crawl({
@@ -335,7 +338,7 @@ program
 
       clearLine();
       const totalApi = crawlResult.pages.reduce((n, p) => n + p.apiCalls.length, 0);
-      console.log(chalk.green('✓'), `크롤링: 페이지 ${crawlResult.pages.length} | API ${totalApi} | 스크린샷 ${crawlResult.pages.filter(p => p.screenshotPath).length}`);
+      console.log(chalk.green('✓'), `분석 완료: 페이지 ${crawlResult.pages.length} | API ${totalApi} | 스크린샷 ${crawlResult.pages.filter(p => p.screenshotPath).length}`);
       await writeFile(crawlResultPath, JSON.stringify(crawlResult, null, 2));
     }
 
