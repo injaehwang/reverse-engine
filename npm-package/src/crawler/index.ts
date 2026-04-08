@@ -1,3 +1,6 @@
+// Playwright 내부 비동기 이벤트 방어
+process.on('unhandledRejection', () => {});
+
 import { chromium, type Page, type BrowserContext } from 'playwright';
 import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -265,12 +268,21 @@ async function handleAuth(ctx: BrowserContext, baseUrl: string, auth: AuthOption
       try { const b = p.locator(s).first(); if (await b.isVisible({ timeout: 2000 })) { await b.click(); log('제출: ' + s); break; } } catch {} }
 
     await p.waitForURL(u => u.toString() !== loginUrl, { timeout: 30000 }).catch(() => log('⚠ URL 변화 없음'));
-    await waitForVisualStability(p); await p.waitForTimeout(3000);
+    await waitForVisualStability(p).catch(() => {});
+    await p.waitForTimeout(3000).catch(() => {});
 
-    if (new URL(p.url()).hostname !== new URL(baseUrl).hostname) { await p.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }); await waitForVisualStability(p); }
+    try {
+      const currentHost = new URL(p.url()).hostname;
+      const baseHost = new URL(baseUrl).hostname;
+      if (currentHost !== baseHost) {
+        await p.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await waitForVisualStability(p).catch(() => {});
+      }
+    } catch { /* URL 파싱 실패 (about:blank 등) — 무시 */ }
+
     await p.screenshot({ path: join(ssDir, '000_after_login.png'), fullPage: true }).catch(() => {});
     log('✓ 로그인 완료 → ' + p.url());
-    await p.close();
+    await p.close().catch(() => {});
   }
 }
 

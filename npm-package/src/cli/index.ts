@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 
+// Playwright 내부 비동기 이벤트에서 발생하는 unhandled rejection 방어
+process.on('unhandledRejection', (reason) => {
+  // 페이지 닫힘/네비게이션 중 발생하는 에러는 무시
+  const msg = String(reason);
+  if (msg.includes('Target closed') || msg.includes('Navigation') || msg.includes('frame was detached') || msg.includes('Execution context was destroyed')) {
+    return;
+  }
+  console.error(chalk.red('⚠ 비동기 오류:'), msg);
+});
+
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { readFile, writeFile, mkdir } from 'fs/promises';
